@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><title>Jack Studio — Admin</title><link rel="stylesheet" href="/styles.css"/></head>
+<body class="admin-body">
+<div id="login-screen" class="login-screen hidden">
+ <div class="login-brand"><div class="js-symbol">JS</div><span>JACK STUDIO</span><small>Commerce management</small></div>
+ <form id="login-form" class="login-card"><div class="eyebrow">ADMIN ACCESS</div><h1>Welcome back.</h1><p>Sign in to manage your store, products and content.</p>
+ <label>Email address<input id="login-email" type="email" autocomplete="username" value="admin@jackstudio.local" required></label>
+ <label>Password<input id="login-password" type="password" autocomplete="current-password" placeholder="Your password" required></label>
+ <p id="login-error" class="form-error hidden"></p><button class="btn btn-dark login-button" type="submit">Sign in →</button>
+ <div class="login-note">Local demo only · Sample records are not real customer data.</div></form>
+</div>
+<div id="app-shell" class="app-shell hidden">
+ <aside id="sidebar" class="sidebar">
+  <div class="sidebar-head"><div class="brand-square">JS</div><div><strong>JACK STUDIO</strong><span>Commerce Admin</span></div><button id="sidebar-close" class="icon-only mobile-only" aria-label="Close menu">×</button></div>
+  <div class="sidebar-search"><span class="i-search">⌕</span><input id="global-search" placeholder="Search products..." aria-label="Search products"/><kbd>⌘ K</kbd></div>
+  <nav id="side-nav"></nav>
+  <div class="sidebar-bottom"><div class="workspace"><div class="workspace-avatar">JS</div><div><b>Jack Studio</b><small>Development store</small></div><span class="dots">•••</span></div></div>
+ </aside>
+ <main class="main-layout"><header class="topbar">
+  <div class="topbar-left"><button id="mobile-menu" class="icon-only mobile-only" aria-label="Open menu">☰</button><span class="app-crumb-icon">▥</span><b id="breadcrumb">Home</b></div>
+  <div class="topbar-actions"><span class="env-chip"><span class="online-dot"></span> Demo store</span><a class="btn btn-outline small" href="/store" target="_blank" rel="noopener">View store ↗</a><button class="avatar-button" title="Profile">JS</button></div>
+ </header><div class="content" id="content"></div></main>
+</div>
+<div class="modal-backdrop hidden" id="modal-backdrop"><div class="modal" id="modal" role="dialog" aria-modal="true"></div></div>
+<div id="toast" class="toast hidden"></div>
+<script type="module" src="/admin.js"></script>
+</body></html>
