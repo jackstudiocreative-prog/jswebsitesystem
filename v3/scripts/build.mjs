@@ -1,6 +1,13 @@
 import { mkdir,copyFile } from 'node:fs/promises';
+import { writeFile } from 'node:fs/promises';
+import { build } from 'esbuild';
 const root=new URL('../',import.meta.url);
 await mkdir(new URL('public/admin/',root),{recursive:true});
 await copyFile(new URL('web/index.html',root),new URL('public/index.html',root));
 await copyFile(new URL('admin/index.html',root),new URL('public/admin/index.html',root));
 await copyFile(new URL('../../jackstudio-admin-mvp/public/styles.css',import.meta.url),new URL('public/styles.css',root));
+const url=process.env.SUPABASE_URL??'',key=process.env.SUPABASE_PUBLISHABLE_KEY??'';
+if(url&&new URL(url).protocol!=='https:')throw Error('HTTPS Supabase URL required');
+if(key&&!key.startsWith('sb_publishable_'))throw Error('Only a Supabase publishable key may enter the browser build');
+await writeFile(new URL('public/auth-config.json',root),JSON.stringify({url,key}));
+await build({entryPoints:[new URL('admin/app.mjs',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')],bundle:true,format:'esm',platform:'browser',outfile:new URL('public/admin.js',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
