@@ -1,6 +1,6 @@
 # Jack Studio admin: audited roadmap
 
-## Implemented in working patch (not yet merged to GitHub)
+## V2 implemented and merged in PR #1
 
 1. GitHub Pages UI: local draft/save/publish process, published pages preview, duplicate SKU prevention; the demo remains public and browser-local.
 2. Local Node server: safe-by-default loopback binding; reject non-demo public/production startup without a strong admin password; login failure throttling; explicit admin authorization.
@@ -39,3 +39,6 @@
 - [ ] Import and validate product SKUs, images, URLs, SEO redirects
 - [ ] Test mobile/desktop store and admin with real users
 - [ ] Run CI checks and security review
+
+## V3 sequence from the independent 2026-11-04 Audit
+Start with the [P0 foundation](V3-FOUNDATION.md). Hosted identity/MFA/reset, object storage, UI adapters and staging recovery remain acceptance gates. Only then proceed with P1 catalogue variants, inventory, section editor and commerce integrations. Do not mark a phase complete based solely on schema scaffolding.

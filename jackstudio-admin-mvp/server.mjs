@@ -1,3 +1,4 @@
+import catalogRules from '../shared/catalog.js';
 import { createServer } from 'node:http';
 import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
@@ -126,7 +127,7 @@ function currentUser(req) {
 async function readBody(req,limit=300000){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit) throw new Error('Request too large');chunks.push(chunk);}return Buffer.concat(chunks);}
 async function parseJson(req){const raw=await readBody(req); if(!raw.length)return {};try{return JSON.parse(raw.toString('utf8'));}catch{throw new Error('Invalid JSON');}}
 const getProduct=(id)=>db.prepare('SELECT * FROM products WHERE id=?').get(id);
-const collectionSlug=(title)=>String(title).trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+const collectionSlug=catalogRules.slug;
 function validateCollection(input,existing={}){
  const title=String(input.title??existing.title??'').trim().slice(0,90);
  const slug=collectionSlug(input.slug??(input.title===undefined?existing.slug:title));

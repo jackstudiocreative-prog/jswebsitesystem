@@ -13,6 +13,7 @@
 </style>
 </head>
 <body><div id="app"></div><div id="modal-container"></div>
+<script src="./shared/catalog.js"></script>
 <script>
 (()=>{'use strict';
 const KEY='jackstudio-github-pages-demo-v1';
@@ -21,7 +22,7 @@ const seed={products:[{id:'JS-101',name:'Urban Carry Briefcase',sku:'JS-UB101',c
 let data;try{const raw=localStorage.getItem(KEY);data=raw?JSON.parse(raw):JSON.parse(JSON.stringify(seed));if(!data.products||!data.pages||!data.settings)throw Error('invalid')}catch{data=JSON.parse(JSON.stringify(seed))}
 // Migration for browser-local demo edits (not a shared or secure database).
 for(const page of data.pages){if(!Object.hasOwn(page,'draftTitle'))page.draftTitle=page.title;if(!Object.hasOwn(page,'draftDescription'))page.draftDescription=page.description;if(!Object.hasOwn(page,'hasDraft'))page.hasDraft=false;}
-if(!Array.isArray(data.collections))data.collections=[...new Set(data.products.map(p=>p.category))].map(name=>({id:'COL-'+name.toLowerCase().replace(/[^a-z0-9]+/g,'-'),title:name,description:'',status:'Active'}));
+if(!Array.isArray(data.collections))data.collections=[...new Set(data.products.map(p=>p.category))].map(name=>({id:'COL-'+JackCatalog.slug(name),title:name,description:'',status:'Active'}));
 for(const p of data.pages)if(!Array.isArray(p.history))p.history=[{version:1,title:p.title,description:p.description}];
 const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(data))}catch{alert('Browser storage is full. Try smaller images or clear demo data.')}};
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

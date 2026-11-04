@@ -44,7 +44,10 @@ Open `http://localhost:3000/admin` for the admin UI and `http://localhost:3000/s
 See [`docs/ROADMAP.md`](./docs/ROADMAP.md) for priorities and the launch checklist.
 
 
-### Second update (prepared, not yet on GitHub)
+### Second update (merged in PR #1)
 - Collections now have real local-database CRUD and safely migrate existing categories.
 - Website Pages show published version history and can restore a previous version as a draft.
 - The GitHub Pages demo also includes browser-local Collections and page history controls. It remains an explicitly non-authenticated static preview.
+
+## V3 P0 foundation (development only)
+See [architecture, schema, API, deployment and known gaps](docs/V3-FOUNDATION.md). V3 is not deployed and the existing UI has not switched to its PostgreSQL API. GitHub Pages remains Demo.
