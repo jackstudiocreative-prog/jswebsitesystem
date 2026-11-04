@@ -32,3 +32,5 @@ jobs:
         working-directory: v3
         env:
           TEST_DATABASE_URL: postgres://test:disposable-ci-only@localhost:5432/jackstudio_test
+      - run: npm run build
+        working-directory: v3
