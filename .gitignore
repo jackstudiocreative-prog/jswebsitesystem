@@ -9,3 +9,5 @@ jackstudio-admin-mvp/data/*
 jackstudio-admin-mvp/public/uploads/*
 !jackstudio-admin-mvp/public/uploads/.gitkeep
 .DS_Store
+
+v3/public/
