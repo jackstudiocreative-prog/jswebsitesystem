@@ -12,10 +12,13 @@
     "node": ">=22.13.0"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
+    "cloudinary": "^2.11.0",
     "jose": "^6.2.15",
     "pg": "^8.23.1"
   },
   "devDependencies": {
-    "@electric-sql/pglite": "^0.5.15"
+    "@electric-sql/pglite": "^0.5.15",
+    "esbuild": "^0.28.2"
   }
 }
