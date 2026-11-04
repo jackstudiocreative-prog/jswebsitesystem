@@ -1,7 +1,7 @@
 import {createClient} from '@supabase/supabase-js';
-import {authStorage,checkResult,verifiedFactor} from './auth-client.mjs';
+import {authStorage,checkResult,verifiedFactor,enrollTotp,verifyTotp,recoverPassword} from './auth-client.mjs';
 const $=id=>document.getElementById(id),message=text=>{$('message').textContent=text;};
-let client,factor,role;
+let client,factor,role,recovery=false;
 async function api(path,body){
  const {session}=checkResult(await client.auth.getSession());
  const response=await fetch('/api/v3/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+(session?.access_token??''),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
@@ -24,12 +24,12 @@ async function signedIn(){
 try{
  const config=await (await fetch('/auth-config.json')).json();if(!config.url||!config.key)throw Error('Staging authentication is not configured.');
  client=createClient(config.url,config.key,{auth:{flowType:'pkce',persistSession:true,storage:authStorage(sessionStorage),detectSessionInUrl:true}});
- client.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
+ client.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){factor=null;role=null;recovery=false;$('qr').removeAttribute('src');$('qr').hidden=true;$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
  $('login').onsubmit=async e=>{e.preventDefault();try{checkResult(await client.auth.signInWithPassword({email:$('email').value,password:$('password').value}));$('password').value='';await signedIn();}catch(err){message(err.message);}};
  action('reset',async()=>{checkResult(await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/admin'}));message('If eligible, a recovery email has been sent. Open it in this browser.');});
- action('update-password',async()=>{if($('new-password').value.length<16)throw Error('Use at least 16 characters.');checkResult(await client.auth.updateUser({password:$('new-password').value}));$('new-password').value='';checkResult(await client.auth.signOut({scope:'global'}));$('recovery').hidden=true;message('Password updated. Sign in again.');});
- action('enroll',async()=>{if(factor)throw Error('An authenticator is already selected.');const data=checkResult(await client.auth.mfa.enroll({factorType:'totp',friendlyName:'Jack Studio Staff'}));factor=data.id;$('qr').src='data:image/svg+xml;charset=utf-8,'+encodeURIComponent(data.totp.qr_code);$('qr').hidden=false;message('Scan the QR code and enter the six-digit code.');});
- action('verify',async()=>{if(!factor||!/^\d{6}$/.test($('code').value))throw Error('Select an authenticator and enter six digits.');checkResult(await client.auth.mfa.challengeAndVerify({factorId:factor,code:$('code').value}));$('code').value='';$('qr').hidden=true;await workspace();});
+ action('update-password',async()=>{if(!recovery)throw Error('Open a valid password recovery link first.');await recoverPassword(client.auth,$('new-password').value);$('new-password').value='';$('recovery').hidden=true;message('Password updated. Sign in again.');});
+ action('enroll',async()=>{if(factor)throw Error('An authenticator is already selected.');const data=await enrollTotp(client.auth);factor=data.id;$('qr').src=data.qr;$('qr').hidden=false;message('Scan the QR code and enter the six-digit code.');});
+ action('verify',async()=>{await verifyTotp(client.auth,factor,$('code').value);$('code').value='';$('qr').removeAttribute('src');$('qr').hidden=true;await workspace();});
  action('logout',async()=>{checkResult(await client.auth.signOut());message('Signed out.');});
  action('refresh',refresh);
  action('upload',async()=>{

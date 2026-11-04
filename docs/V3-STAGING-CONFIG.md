@@ -98,3 +98,12 @@ browser E2E are remaining work. Checkout/payment/member migration remain disable
 Rollback code to PR #3 if necessary, retain additive migrations and private assets. Do not roll
 back the security migration by granting browser roles access. Restore any damaged data to an
 isolated database first; no destructive down migration is provided.
+
+## MFA QR correction
+
+The SDK-provided SVG data URL is validated and assigned unchanged to the image src. A second
+prefix is never added. Tests cover raw/percent-encoded SDK URLs, malformed/nested URLs, enrollment
+errors, challenge and verification sequencing, aal2 enforcement, existing factors, recovery and
+logout cleanup. A DOM-event harness executes the actual admin module with a mocked provider to
+check the displayed src and workspace access. This is not a live browser/Supabase MFA or email test.
+Hosted authenticator scanning and same-tab PKCE recovery remain first-Staging acceptance checks.
