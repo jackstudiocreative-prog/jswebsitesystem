@@ -1,6 +1,6 @@
 # Jack Studio Commerce Admin — First Working MVP
 
-A Shopify-inspired **independent website admin prototype**. It has a real Node.js backend, a local SQLite database, and a public demo storefront. No Shopify connection or third-party dependencies are needed to try it locally.
+A Shopify-inspired **independent website admin prototype**. Updated with a separate Draft → Preview → Publish workflow and local login safety checks. It has a real Node.js backend, a local SQLite database, and a public demo storefront. No Shopify connection or third-party dependencies are needed to try it locally.
 
 ## Quick start (Windows / macOS / Linux)
 
@@ -25,10 +25,10 @@ If port 3000 is busy: PowerShell `$env:PORT=4000; npm start`; macOS/Linux `PORT=
 - Local persistent SQLite database (`data/jackstudio.sqlite`)
 - Product creation, update, deletion, status and inventory field
 - Products automatically shown in the standalone demo store
-- Collections grouped by product category
+- Collections with create/edit/delete, slug, status (draft collections hidden from storefront) and automatic product category rename
 - Basic orders list and fulfilment status updating **on sample orders**
 - Sample customer list and demo analytics clearly identified as synthetic
-- Editable content pages with published / draft status
+- Editable pages with Save Draft / Publish / Unpublish and revision history; restore older published content as a draft
 - Editable homepage hero, announcement bar and basic store settings
 - Media library: upload JPEG, PNG, WEBP up to 4MB, copy uploaded URL
 - Desktop/mobile preview and basic browser-local cart (no real checkout)
@@ -70,3 +70,10 @@ For local testing, sample data is seeded at first startup (fake products, custom
 - `data`: local database written when the app starts
 
 **The product drawings are placeholders, not actual Jack Studio inventory photography.** Replace them with real images inside Media Library.
+
+## Audit updates (November 2026)
+
+- Pages now have **Save Draft**, **Preview Draft**, **Publish**, and **Unpublish** actions. Saved draft text will not appear on the storefront until it is published. Existing SQLite files migrate draft fields automatically.
+- The Node server now binds to `127.0.0.1` by default. To listen on a public interface you must explicitly set `HOST` and a non-demo `ADMIN_PASSWORD` with at least 16 characters. **This is not a recommendation to publish the prototype without a real security review.**
+- Login attempts are throttled in memory after 8 failed attempts within 15 minutes; a proper production identity provider with MFA is still required.
+- Run `npm test` for updated draft/publish and security smoke tests.

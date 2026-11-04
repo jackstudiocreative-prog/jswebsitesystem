@@ -1,0 +1,23 @@
+name: Jack Studio Admin checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.1'
+      - name: Check JavaScript
+        run: |
+          node --check jackstudio-admin-mvp/server.mjs
+          node --check jackstudio-admin-mvp/public/admin.js
+          node --check jackstudio-admin-mvp/public/store.js
+          node -e "const fs=require('fs'); const s=fs.readFileSync('index.html','utf8'); const js=s.match(/<script>([\s\S]*?)<\/script>/)?.[1]; if(!js)throw Error('Missing inline JavaScript'); new Function(js);"
+      - name: Run backend smoke tests
+        working-directory: jackstudio-admin-mvp
+        run: npm test
