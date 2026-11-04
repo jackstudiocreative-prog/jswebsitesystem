@@ -1,0 +1,11 @@
+node_modules/
+.env
+.env.*
+!.env.example
+*.sqlite
+*.sqlite-*
+jackstudio-admin-mvp/data/*
+!jackstudio-admin-mvp/data/.gitkeep
+jackstudio-admin-mvp/public/uploads/*
+!jackstudio-admin-mvp/public/uploads/.gitkeep
+.DS_Store

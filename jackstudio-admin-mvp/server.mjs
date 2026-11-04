@@ -3,10 +3,17 @@ import { DatabaseSync } from 'node:sqlite';
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { existsSync, statSync } from 'node:fs';
-import { join, extname, resolve } from 'node:path';
+import { join, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('.', import.meta.url));
+const HOST = process.env.HOST || '127.0.0.1';
+const LOOPBACK = ['127.0.0.1','::1','localhost'].includes(HOST);
+const DEMO_PASSWORD = 'JackStudio2026!';
+if ((!LOOPBACK || process.env.NODE_ENV === 'production') && (!process.env.ADMIN_PASSWORD || process.env.ADMIN_PASSWORD.length < 16 || process.env.ADMIN_PASSWORD === DEMO_PASSWORD)) {
+ throw new Error('Public/production deployment requires a non-demo ADMIN_PASSWORD with at least 16 characters. Use a managed auth service for real deployments.');
+}
+
 const PUBLIC = join(ROOT, 'public');
 const DATA = process.env.DATA_DIR || join(ROOT, 'data');
 await mkdir(DATA, { recursive: true });
@@ -22,17 +29,25 @@ db.exec(`
  CREATE TABLE IF NOT EXISTS order_items (id INTEGER PRIMARY KEY AUTOINCREMENT, order_id INTEGER REFERENCES orders(id), product_id INTEGER REFERENCES products(id), quantity INTEGER NOT NULL, price_cents INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS pages (id INTEGER PRIMARY KEY AUTOINCREMENT, slug TEXT NOT NULL UNIQUE, title TEXT NOT NULL, content TEXT DEFAULT '', seo_title TEXT DEFAULT '', seo_description TEXT DEFAULT '', is_published INTEGER NOT NULL DEFAULT 1, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
  CREATE TABLE IF NOT EXISTS media (id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, url TEXT NOT NULL, mime TEXT NOT NULL, size_bytes INTEGER NOT NULL DEFAULT 0, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
+ CREATE TABLE IF NOT EXISTS collections (id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL UNIQUE COLLATE NOCASE, slug TEXT NOT NULL UNIQUE, description TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+ CREATE TABLE IF NOT EXISTS page_revisions (id INTEGER PRIMARY KEY AUTOINCREMENT, page_id INTEGER NOT NULL REFERENCES pages(id), revision_number INTEGER NOT NULL, title TEXT NOT NULL, content TEXT NOT NULL DEFAULT '', seo_title TEXT NOT NULL DEFAULT '', seo_description TEXT NOT NULL DEFAULT '', published_at TEXT DEFAULT CURRENT_TIMESTAMP, UNIQUE(page_id,revision_number));
  CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
  CREATE TABLE IF NOT EXISTS activity (id INTEGER PRIMARY KEY AUTOINCREMENT, message TEXT NOT NULL, kind TEXT NOT NULL DEFAULT 'info', created_at TEXT DEFAULT CURRENT_TIMESTAMP);
  CREATE TABLE IF NOT EXISTS daily_stats (day TEXT PRIMARY KEY, visitors INTEGER NOT NULL, add_to_cart INTEGER NOT NULL DEFAULT 0);
 `);
+// Existing SQLite files are upgraded in place. Published content stays unchanged until Publish is clicked.
+const pageColumns = new Set(db.prepare('PRAGMA table_info(pages)').all().map(c => c.name));
+for (const column of ['draft_title','draft_content','draft_seo_title','draft_seo_description']) {
+ if (!pageColumns.has(column)) db.exec(`ALTER TABLE pages ADD COLUMN ${column} TEXT`);
+}
+if (!pageColumns.has('has_unpublished_changes')) db.exec('ALTER TABLE pages ADD COLUMN has_unpublished_changes INTEGER NOT NULL DEFAULT 0');
 function hashPassword(password, salt) { return scryptSync(password, salt, 64).toString('hex'); }
 const count = (table) => db.prepare(`SELECT COUNT(*) as n FROM ${table}`).get().n;
 const storeName = 'Jack Studio';
 function recordActivity(message, kind='info') { db.prepare('INSERT INTO activity (message,kind) VALUES (?,?)').run(message,kind); }
 if (!count('users')) {
  const email = (process.env.ADMIN_EMAIL || 'admin@jackstudio.local').toLowerCase();
- const password = process.env.ADMIN_PASSWORD || 'JackStudio2026!';
+ const password = process.env.ADMIN_PASSWORD || DEMO_PASSWORD;
  const salt = randomBytes(20).toString('hex');
  db.prepare('INSERT INTO users(email,name,role,salt,password_hash) VALUES (?,?,?,?,?)').run(email,'Jack Studio Admin','admin',salt,hashPassword(password,salt));
 }
@@ -68,6 +83,25 @@ if (!count('pages')) {
  ['contact','Contact','Get in touch with our team.','Contact | Jack Studio','Contact Jack Studio.']
  ].forEach(p=>stmt.run(...p));
 }
+db.exec(`UPDATE pages SET
+ draft_title=COALESCE(draft_title,title),
+ draft_content=COALESCE(draft_content,content),
+ draft_seo_title=COALESCE(draft_seo_title,seo_title),
+ draft_seo_description=COALESCE(draft_seo_description,seo_description)`);
+// Create editable collection records from existing products on first upgrade.
+const seedCollection=db.prepare('INSERT OR IGNORE INTO collections(title,slug) VALUES (?,?)');
+for(const p of db.prepare('SELECT DISTINCT category FROM products').all()) {
+ const title=String(p.category).trim();
+ const slug=title.toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+ if(title && slug)seedCollection.run(title,slug);
+}
+// Record current published content as the initial version on upgrade.
+const initRevision=db.prepare('INSERT INTO page_revisions(page_id,revision_number,title,content,seo_title,seo_description) VALUES(?,1,?,?,?,?)');
+for(const p of db.prepare('SELECT * FROM pages').all()) {
+ const existing=db.prepare('SELECT 1 FROM page_revisions WHERE page_id=? LIMIT 1').get(p.id);
+ if(!existing)initRevision.run(p.id,p.title,p.content,p.seo_title,p.seo_description);
+}
+
 if (!count('settings')) {
  const stmt=db.prepare('INSERT INTO settings(key,value) VALUES(?,?)');
  Object.entries({site_name:storeName,announcement:'LOGO CUSTOMIZE · NAME CUSTOMIZE · GIFT BOX AVAILABLE FOR BULK ORDERS',hero_kicker:'FROM EVERYDAY ESSENTIALS',hero_title:'TO EVERY JOURNEY',hero_subtitle:'Thoughtful design. Trusted quality. Care beyond every purchase.',hero_button:'Explore Collections',contact_email:'hello@jackstudio.com.my',membership_url:'',currency:'MYR'}).forEach(([k,v])=>stmt.run(k,v));
@@ -92,6 +126,17 @@ function currentUser(req) {
 async function readBody(req,limit=300000){let size=0;const chunks=[];for await(const chunk of req){size+=chunk.length;if(size>limit) throw new Error('Request too large');chunks.push(chunk);}return Buffer.concat(chunks);}
 async function parseJson(req){const raw=await readBody(req); if(!raw.length)return {};try{return JSON.parse(raw.toString('utf8'));}catch{throw new Error('Invalid JSON');}}
 const getProduct=(id)=>db.prepare('SELECT * FROM products WHERE id=?').get(id);
+const collectionSlug=(title)=>String(title).trim().toLowerCase().replace(/[^a-z0-9]+/g,'-').replace(/^-|-$/g,'');
+function validateCollection(input,existing={}){
+ const title=String(input.title??existing.title??'').trim().slice(0,90);
+ const slug=collectionSlug(input.slug??(input.title===undefined?existing.slug:title));
+ const description=String(input.description??existing.description??'').trim().slice(0,1000);
+ const status=input.status??existing.status??'active';
+ if(!title || !slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug))throw new Error('Collection title and valid URL slug are required.');
+ if(!['active','draft'].includes(status))throw new Error('Invalid collection status');
+ return {title,slug,description,status};
+}
+
 function validProduct(data, existing={}) {
  const title=String(data.title??existing.title??'').trim().slice(0,150);
  const sku=String(data.sku??existing.sku??'').trim().slice(0,65);
@@ -104,22 +149,39 @@ function validProduct(data, existing={}) {
  if(image && !image.startsWith('/assets/')&&!image.startsWith('/uploads/')&&!/^https:\/\//.test(image)) throw new Error('Image URL must start with https:// or be a local uploaded image.');
  return {title,sku,handle,category,status,price_cents:safeInt(data.price_cents??existing.price_cents,0,100000000),compare_at_cents:safeInt(data.compare_at_cents??existing.compare_at_cents,0,100000000),inventory:safeInt(data.inventory??existing.inventory,0,1000000),image_url:image,description:String(data.description??existing.description??'').slice(0,5000)};
 }
+// Local safety net, not a replacement for managed identity protection and MFA.
+const loginAttempts = new Map();
+function checkLoginLimit(req) {
+ const ip=req.socket.remoteAddress||'unknown';
+ const now=Date.now();
+ const state=loginAttempts.get(ip);
+ if(state && now-state.start<15*60*1000 && state.failures>=8) return {blocked:true,ip};
+ if(!state || now-state.start>=15*60*1000) loginAttempts.set(ip,{start:now,failures:0});
+ return {blocked:false,ip};
+}
+function recordFailedLogin(ip) {
+ const state=loginAttempts.get(ip);
+ if(state)state.failures++;
+}
 function originAllowed(req){const origin=req.headers.origin; if(!origin)return true;try{return new URL(origin).host===req.headers.host;}catch{return false;}}
 
 async function api(req,res,path,url) {
  const method=req.method;
  if(method!=='GET' && !originAllowed(req))return error(res,'Cross-origin request blocked',403);
  if(path==='/api/login'&&method==='POST') {
+  const limit=checkLoginLimit(req);if(limit.blocked)return error(res,'Too many sign-in attempts. Try again later.',429);
   const body=await parseJson(req);const email=String(body.email||'').trim().toLowerCase();const pw=String(body.password||'');
   const u=db.prepare('SELECT * FROM users WHERE email=?').get(email);
-  if(!u || !timingSafeEqual(Buffer.from(hashPassword(pw,u.salt),'hex'),Buffer.from(u.password_hash,'hex')))return error(res,'Incorrect email or password',401);
+  if(!u || !timingSafeEqual(Buffer.from(hashPassword(pw,u.salt),'hex'),Buffer.from(u.password_hash,'hex'))){recordFailedLogin(limit.ip);return error(res,'Incorrect email or password',401);}
+  loginAttempts.delete(limit.ip);
   const token=randomBytes(32).toString('hex'),hash=createHash('sha256').update(token).digest('hex');
   db.prepare('INSERT INTO sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run(hash,u.id,Date.now()+7*24*3600*1000);
   res.setHeader('Set-Cookie',`js_session=${token}; HttpOnly; Path=/; SameSite=Lax; Max-Age=604800${req.headers['x-forwarded-proto']==='https'?' ; Secure':''}`);
   return json(res,{name:u.name,email:u.email,role:u.role});
  }
- if(path==='/api/storefront'&&method==='GET') return json(res,{settings:settings(),products:db.prepare("SELECT * FROM products WHERE status='active' ORDER BY id DESC").all(),pages:db.prepare('SELECT slug,title,content FROM pages WHERE is_published=1 ORDER BY id').all()});
+ if(path==='/api/storefront'&&method==='GET') return json(res,{settings:settings(),products:db.prepare("SELECT * FROM products WHERE products.status='active' AND EXISTS (SELECT 1 FROM collections WHERE collections.title=products.category AND collections.status='active') ORDER BY products.id DESC").all(),pages:db.prepare('SELECT slug,title,content FROM pages WHERE is_published=1 ORDER BY id').all()});
  const user=currentUser(req);if(!user)return error(res,'Not signed in',401);
+  if(user.role!=='admin')return error(res,'Administrator permission required',403);
  if(path==='/api/session'&&method==='GET')return json(res,user);
  if(path==='/api/logout'&&method==='POST'){
   const cookies=Object.fromEntries((req.headers.cookie||'').split(';').map(p=>p.trim().split('=').slice(0,2)));
@@ -134,6 +196,7 @@ async function api(req,res,path,url) {
  if(path==='/api/products'&&method==='GET')return json(res,db.prepare('SELECT * FROM products ORDER BY id DESC').all());
  if(path==='/api/products'&&method==='POST') {
   const p=validProduct(await parseJson(req));
+  if(!db.prepare('SELECT id FROM collections WHERE title=?').get(p.category))return error(res,'Choose an existing collection',400);
   const x=db.prepare('INSERT INTO products(title,handle,category,sku,price_cents,compare_at_cents,inventory,status,image_url,description) VALUES(?,?,?,?,?,?,?,?,?,?)').run(p.title,p.handle,p.category,p.sku,p.price_cents,p.compare_at_cents,p.inventory,p.status,p.image_url,p.description);
   recordActivity(`Product created: ${p.title}`,'product');return json(res,getProduct(x.lastInsertRowid),201);
  }
@@ -141,10 +204,37 @@ async function api(req,res,path,url) {
  if(productMatch){const id=Number(productMatch[1]);const old=getProduct(id);if(!old)return error(res,'Product not found',404);
   if(method==='PUT'){
    const p=validProduct(await parseJson(req),old);
+   if(!db.prepare('SELECT id FROM collections WHERE title=?').get(p.category))return error(res,'Choose an existing collection',400);
    db.prepare('UPDATE products SET title=?,handle=?,category=?,sku=?,price_cents=?,compare_at_cents=?,inventory=?,status=?,image_url=?,description=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(p.title,p.handle,p.category,p.sku,p.price_cents,p.compare_at_cents,p.inventory,p.status,p.image_url,p.description,id);
    recordActivity(`Product updated: ${p.title}`,'product');return json(res,getProduct(id));
   }
   if(method==='DELETE'){db.prepare('DELETE FROM products WHERE id=?').run(id);recordActivity(`Product deleted: ${old.title}`,'product');return json(res,{ok:true});}
+ }
+ if(path==='/api/collections'&&method==='GET')return json(res,db.prepare('SELECT collections.*, (SELECT COUNT(*) FROM products WHERE products.category=collections.title) AS product_count FROM collections ORDER BY title COLLATE NOCASE').all());
+ if(path==='/api/collections'&&method==='POST'){
+  const p=validateCollection(await parseJson(req));
+  const r=db.prepare('INSERT INTO collections(title,slug,description,status) VALUES (?,?,?,?)').run(p.title,p.slug,p.description,p.status);
+  recordActivity(`Collection created: ${p.title}`,'collection');return json(res,db.prepare('SELECT * FROM collections WHERE id=?').get(r.lastInsertRowid),201);
+ }
+ const collectionMatch=path.match(/^\/api\/collections\/(\d+)$/);
+ if(collectionMatch){
+  const id=Number(collectionMatch[1]);const old=db.prepare('SELECT * FROM collections WHERE id=?').get(id);if(!old)return error(res,'Collection not found',404);
+  if(method==='PUT'){
+   const p=validateCollection(await parseJson(req),old);
+   db.exec('BEGIN IMMEDIATE');
+   try{
+    db.prepare('UPDATE collections SET title=?,slug=?,description=?,status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(p.title,p.slug,p.description,p.status,id);
+    if(p.title!==old.title)db.prepare('UPDATE products SET category=?,updated_at=CURRENT_TIMESTAMP WHERE category=?').run(p.title,old.title);
+    db.exec('COMMIT');
+   }catch(e){db.exec('ROLLBACK');throw e;}
+   recordActivity(`Collection updated: ${old.title} → ${p.title}`,'collection');return json(res,db.prepare('SELECT * FROM collections WHERE id=?').get(id));
+  }
+  if(method==='DELETE'){
+   const count=db.prepare('SELECT COUNT(*) AS n FROM products WHERE category=?').get(old.title).n;
+   if(count)return error(res,'Move or delete the collection products before deleting it.',409);
+   db.prepare('DELETE FROM collections WHERE id=?').run(id);
+   recordActivity(`Collection deleted: ${old.title}`,'collection');return json(res,{ok:true});
+  }
  }
  if(path==='/api/orders'&&method==='GET')return json(res,db.prepare('SELECT orders.*,customers.name as customer,customers.email FROM orders LEFT JOIN customers ON customers.id=orders.customer_id ORDER BY orders.created_at DESC').all());
  const orderMatch=path.match(/^\/api\/orders\/(\d+)$/);
@@ -157,11 +247,41 @@ async function api(req,res,path,url) {
  if(path==='/api/pages'&&method==='GET')return json(res,db.prepare('SELECT * FROM pages ORDER BY id').all());
  const pageMatch=path.match(/^\/api\/pages\/(\d+)$/);
  if(pageMatch&&method==='PUT'){
-  const p=await parseJson(req);const id=Number(pageMatch[1]);const existing=db.prepare('SELECT * FROM pages WHERE id=?').get(id);if(!existing)return error(res,'Page not found',404);
-  const values=[String(p.title??existing.title).trim().slice(0,160),String(p.content??existing.content).slice(0,20000),String(p.seo_title??existing.seo_title).slice(0,160),String(p.seo_description??existing.seo_description).slice(0,320),p.is_published===undefined?existing.is_published:Number(Boolean(p.is_published)),id];
+  const p=await parseJson(req);const id=Number(pageMatch[1]);const existing=db.prepare('SELECT * FROM pages WHERE id=?').get(id);
+  if(!existing)return error(res,'Page not found',404);
+  const values=[String(p.title??existing.draft_title??existing.title).trim().slice(0,160),String(p.content??existing.draft_content??existing.content).slice(0,20000),String(p.seo_title??existing.draft_seo_title??existing.seo_title).slice(0,160),String(p.seo_description??existing.draft_seo_description??existing.seo_description).slice(0,320),id];
   if(!values[0])return error(res,'Page title required');
-  db.prepare('UPDATE pages SET title=?,content=?,seo_title=?,seo_description=?,is_published=?,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(...values);
-  recordActivity(`Page updated: ${values[0]}`,'page');return json(res,db.prepare('SELECT * FROM pages WHERE id=?').get(id));
+  db.prepare('UPDATE pages SET draft_title=?,draft_content=?,draft_seo_title=?,draft_seo_description=?,has_unpublished_changes=1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(...values);
+  recordActivity(`Draft saved: ${values[0]}`,'page');return json(res,db.prepare('SELECT * FROM pages WHERE id=?').get(id));
+ }
+ const pageAction=path.match(/^\/api\/pages\/(\d+)\/(publish|unpublish)$/);
+ if(pageAction&&method==='POST'){
+  const id=Number(pageAction[1]);const existing=db.prepare('SELECT * FROM pages WHERE id=?').get(id);
+  if(!existing)return error(res,'Page not found',404);
+  if(pageAction[2]==='publish'){
+   db.exec('BEGIN IMMEDIATE');
+   try{
+    db.prepare('UPDATE pages SET title=COALESCE(draft_title,title),content=COALESCE(draft_content,content),seo_title=COALESCE(draft_seo_title,seo_title),seo_description=COALESCE(draft_seo_description,seo_description),is_published=1,has_unpublished_changes=0,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(id);
+    const next=db.prepare('SELECT COALESCE(MAX(revision_number),0)+1 AS n FROM page_revisions WHERE page_id=?').get(id).n;
+    const live=db.prepare('SELECT * FROM pages WHERE id=?').get(id);
+    db.prepare('INSERT INTO page_revisions(page_id,revision_number,title,content,seo_title,seo_description) VALUES(?,?,?,?,?,?)').run(id,next,live.title,live.content,live.seo_title,live.seo_description);
+    db.exec('COMMIT');
+   }catch(e){db.exec('ROLLBACK');throw e;}
+  } else db.prepare('UPDATE pages SET is_published=0,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(id);
+  recordActivity(`Page ${pageAction[2]==='publish'?'published':'unpublished'}: ${existing.slug}`,'page');return json(res,db.prepare('SELECT * FROM pages WHERE id=?').get(id));
+ }
+ const revisionList=path.match(/^\/api\/pages\/(\d+)\/revisions$/);
+ if(revisionList&&method==='GET'){
+  const id=Number(revisionList[1]);if(!db.prepare('SELECT id FROM pages WHERE id=?').get(id))return error(res,'Page not found',404);
+  return json(res,db.prepare('SELECT id,page_id,revision_number,title,published_at FROM page_revisions WHERE page_id=? ORDER BY revision_number DESC LIMIT 30').all(id));
+ }
+ const restoreRevision=path.match(/^\/api\/pages\/(\d+)\/revisions\/(\d+)\/restore$/);
+ if(restoreRevision&&method==='POST'){
+  const pageId=Number(restoreRevision[1]),revisionId=Number(restoreRevision[2]);
+  const revision=db.prepare('SELECT * FROM page_revisions WHERE id=? AND page_id=?').get(revisionId,pageId);
+  if(!revision)return error(res,'Revision not found',404);
+  db.prepare('UPDATE pages SET draft_title=?,draft_content=?,draft_seo_title=?,draft_seo_description=?,has_unpublished_changes=1,updated_at=CURRENT_TIMESTAMP WHERE id=?').run(revision.title,revision.content,revision.seo_title,revision.seo_description,pageId);
+  recordActivity(`Revision ${revision.revision_number} restored as draft`,'page');return json(res,db.prepare('SELECT * FROM pages WHERE id=?').get(pageId));
  }
  if(path==='/api/settings'&&method==='GET')return json(res,settings());
  if(path==='/api/settings'&&method==='PUT'){
@@ -197,6 +317,8 @@ const server=createServer(async(req,res)=>{
   res.setHeader('X-Content-Type-Options','nosniff');
   res.setHeader('X-Frame-Options','DENY');
   res.setHeader('Referrer-Policy','strict-origin-when-cross-origin');
+  res.setHeader('X-Robots-Tag','noindex, nofollow');
+  res.setHeader('Permissions-Policy','camera=(), microphone=(), geolocation=()');
   if(path.startsWith('/api/'))return await api(req,res,path,url);
   if(req.method!=='GET')return error(res,'Method not allowed',405);
   let file;
@@ -211,8 +333,8 @@ const server=createServer(async(req,res)=>{
   console.error(e);
   if(/UNIQUE constraint failed/.test(e.message))return error(res,'Product handle, SKU or another unique value already exists.',409);
   if(/too large/i.test(e.message))return error(res,'File or request too large',413);
-  return error(res,e.message||'Unexpected server error',500);
+  return error(res,'Unexpected server error',500);
  }
 });
-if(process.env.NODE_ENV!=='test')server.listen(PORT,'0.0.0.0',()=>console.log(`Jack Studio Admin demo ready: http://localhost:${PORT}/admin`));
+if(process.env.NODE_ENV!=='test')server.listen(PORT,HOST,()=>console.log(`Jack Studio Admin ${LOOPBACK?'LOCAL DEMO':'SERVER'} ready: http://${HOST}:${PORT}/admin`));
 export {server,db};
