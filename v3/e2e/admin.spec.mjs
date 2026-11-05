@@ -12,9 +12,9 @@ test('staff create a product with variants, adjust stock and see it in inventory
  await page.getByRole('button',{name:'Save product'}).click();await expect(page.getByText('Product saved to database.')).toBeVisible();
  await expect(page.getByRole('row',{name:new RegExp(title)})).toContainText('RM 189.00');
  await nav(page,'Inventory');await page.getByLabel('Search product or SKU').fill(title);await page.getByRole('button',{name:'Apply filters'}).click();
- const row=page.getByRole('row',{name:new RegExp(title)});await expect(row).toContainText('Low stock');
+ const stockTable=page.locator('.table-wrap').first(),row=stockTable.getByRole('row',{name:new RegExp(title)});await expect(row).toContainText('Low stock');
  await row.getByRole('button',{name:'Adjust'}).click();await page.locator('.adjust-panel').getByLabel('Quantity',{exact:true}).fill('6');await page.getByLabel('Reason').selectOption('received');await page.getByRole('button',{name:'Apply adjustment'}).click();
- await expect(page.getByText(new RegExp(`now 10\\.`))).toBeVisible();await expect(page.getByRole('row',{name:new RegExp(title)})).toContainText('In stock');await axe(page,'inventory');
+ await expect(page.getByText(new RegExp(`now 10\\.`))).toBeVisible();await expect(stockTable.getByRole('row',{name:new RegExp(title)})).toContainText('In stock');await axe(page,'inventory');
  g.check();
 });
 test('staff build a page from a template, preview it and publish it to the website',async({page})=>{
