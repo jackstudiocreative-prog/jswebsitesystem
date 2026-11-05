@@ -35,7 +35,7 @@ try{
  action('refresh',refresh);
  action('upload',async()=>{
   if(role==='viewer')throw Error('Editor permission required');const file=$('file').files[0];if(!file||file.size>10000000||!['image/jpeg','image/png','image/webp'].includes(file.type))throw Error('Choose JPEG/PNG/WebP up to 10 MB.');
-  const intent=await api('uploads/sign',{}),form=new FormData();form.set('file',file);for(const [k,v]of Object.entries(intent.params))form.set(k,String(v));form.set('api_key',intent.api_key);form.set('signature',intent.signature);
+  const intent=await api('uploads/sign',{filename:file.name}),form=new FormData();form.set('file',file);for(const [k,v]of Object.entries(intent.params))form.set(k,String(v));form.set('api_key',intent.api_key);form.set('signature',intent.signature);
   const response=await fetch('https://api.cloudinary.com/v1_1/'+encodeURIComponent(intent.cloud_name)+'/image/upload',{method:'POST',body:form});if(!response.ok)throw Error('Upload failed; no database image was published.');
   await api('uploads/finalize',{id:intent.id});message('Master verified and stored privately.');await refresh();
  });
