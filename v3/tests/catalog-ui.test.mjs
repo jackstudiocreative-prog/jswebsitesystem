@@ -12,13 +12,13 @@ test('admin DOM navigates, saves product fields, blocks viewer editing and never
  const api=async(path,body,method)=>{calls.push({path,body,method});if(path==='dashboard')return {products:0,active:0,drafts:0,collections:0,media:0};if(path==='products'&&body){products=[{id:'1',...body,revision:1}];return products[0];}if(path==='products/1')return {...products[0],collection_ids:[],media:[]};return {items:path.startsWith('products?')?products:[],total:path.startsWith('products?')?products.length:0};};
  const find=text=>[...document.querySelectorAll('button')].find(b=>b.textContent===text);
  const nav=async name=>{document.querySelector(`[data-view="${name}"]`).click();await settle();};
- let ui=mountAdmin(api,'editor',m=>messages.push(m));await ui.reload();assert.match(document.getElementById('admin-content').textContent,/No|not connected/);
+ let ui=mountAdmin(api,'editor',m=>messages.push(m));await ui.reload();assert.match(document.getElementById('admin-content').textContent,/Orders are paid through eGHL/);
  await nav('Products');find('Add product').click();await settle();
  const form=document.querySelector('.editor-grid');assert.ok(form);const field=label=>[...form.querySelectorAll('label')].find(n=>n.textContent.startsWith(label)).querySelector('input,textarea');
  field('Title').value='<img src=x onerror=alert(1)>';field('Price').value='12.34';field('SKU').value='TEST-1';field('Inventory').value='4';
  form.dispatchEvent(new window.Event('submit',{cancelable:true}));await settle();
  const saved=calls.find(c=>c.path==='products'&&c.body);assert.equal(saved.body.price_minor,1234);assert.equal(saved.body.inventory,4);assert.equal(saved.body.status,'draft');assert.equal(document.querySelectorAll('#admin-content img').length,0);assert.match(document.getElementById('admin-content').textContent,/<img src=x/);
- await nav('Orders');assert.match(document.getElementById('admin-content').textContent,/not implemented/);
+ await nav('Orders');assert.match(document.getElementById('admin-content').textContent,/No orders yet/);
  await nav('Media Library');assert.equal(document.getElementById('media-upload').hidden,false);
  ui.destroy();ui=mountAdmin(api,'viewer',()=>{});await nav('Products');assert.equal(find('Add product').disabled,true);find('View').click();await settle();assert.equal(find('Save product').disabled,true);assert.ok([...document.querySelectorAll('.editor-grid input')].every(n=>n.disabled));ui.destroy();delete globalThis.document;delete globalThis.window;
 });

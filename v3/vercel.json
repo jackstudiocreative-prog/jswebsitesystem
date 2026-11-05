@@ -11,7 +11,12 @@
   {"source":"/api/v3/:path*","destination":"/api/index"},
   {"source":"/health","destination":"/api/index"},
   {"source":"/admin","destination":"/admin/index.html"},
-  {"source":"/pages/:slug","destination":"/page.html"}
+  {"source":"/pages/:slug","destination":"/page.html"},
+  {"source":"/products/:handle","destination":"/shop.html"},
+  {"source":"/cart","destination":"/shop.html"},
+  {"source":"/checkout","destination":"/shop.html"},
+  {"source":"/order/:number*","destination":"/shop.html"},
+  {"source":"/pay/mock","destination":"/shop.html"}
  ],
  "headers":[{"source":"/(.*)","headers":[
   {"key":"X-Robots-Tag","value":"noindex, nofollow"},

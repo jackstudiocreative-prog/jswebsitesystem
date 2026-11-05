@@ -14,11 +14,11 @@ export async function variantsFor(db,productId,lock=false){
 }
 // One statement: the stock change and its ledger row commit together or not at all. The WHERE
 // guard is re-checked after any row lock wait, so concurrent removals can never go below zero.
-export async function adjustStock(db,{variantId,delta,reason,note='',actor}){
+export async function adjustStock(db,{variantId,delta,reason,note='',actor,orderId=null}){
  if(delta===0)return null;
  const row=(await db.query(`WITH v AS (UPDATE product_variants SET inventory=inventory+$2,updated_at=now() WHERE id=$1 AND inventory+$2>=0 RETURNING id,product_id,inventory)
-  INSERT INTO inventory_adjustments(variant_id,product_id,delta,quantity_before,quantity_after,reason,note,actor)
-  SELECT id,product_id,$2,inventory-$2,inventory,$3,$4,$5 FROM v RETURNING *`,[variantId,delta,reason,note,actor])).rows[0];
+  INSERT INTO inventory_adjustments(variant_id,product_id,delta,quantity_before,quantity_after,reason,note,actor,order_id)
+  SELECT id,product_id,$2,inventory-$2,inventory,$3,$4,$5,$6 FROM v RETURNING *`,[variantId,delta,reason,note,actor??null,orderId])).rows[0];
  if(!row)throw new HttpError(409,'Inventory cannot go below zero.');
  return row;
 }
