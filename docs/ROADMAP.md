@@ -1,5 +1,11 @@
 # Jack Studio admin: audited roadmap
 
+## V3 Phase 1 under review (not released)
+
+Shared database catalogue dashboard, product editing/search/archive, collection membership/order and private media selection are implemented in the review branch, with Migration 004 pending operator review. See [implementation, schema, tests and release gates](V3-CATALOG-ADMIN.md). PR #6 invitation code is preserved. Real invitations, SMTP, hosted browser E2E and deployment are paused.
+
+Next: variants and inventory ledger, scalable media pickers, then structured Website Editor. Customers, Orders, Settings editor and payment/membership workflows are explicitly unfinished.
+
 ## V2 implemented and merged in PR #1
 
 1. GitHub Pages UI: local draft/save/publish process, published pages preview, duplicate SKU prevention; the demo remains public and browser-local.

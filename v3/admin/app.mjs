@@ -1,22 +1,19 @@
+import {mountAdmin} from './catalog-ui.mjs';
 import {createClient} from '@supabase/supabase-js';
 import {authStorage,checkResult,verifiedFactor,enrollTotp,verifyTotp,recoverPassword} from './auth-client.mjs';
 import {captureCallback,completeCallback,setInvitePassword} from './auth-callback.mjs';
 const callback=captureCallback(location,history);
 const $=id=>document.getElementById(id),message=text=>{$('message').textContent=text;};
-let client,factor,role,recovery=false,invitation=false;
-async function api(path,body){
+let adminUI,client,factor,role,recovery=false,invitation=false;
+async function api(path,body,method=body?'POST':'GET'){
  const {session}=checkResult(await client.auth.getSession());
- const response=await fetch('/api/v3/'+path,{method:body?'POST':'GET',headers:{Authorization:'Bearer '+(session?.access_token??''),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
+ const response=await fetch('/api/v3/'+path,{method,headers:{Authorization:'Bearer '+(session?.access_token??''),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
  const data=await response.json();if(!response.ok)throw Error(data.error);return data;
 }
 function action(id,fn){$(id).addEventListener('click',async e=>{e.preventDefault();$(id).disabled=true;try{await fn();}catch(err){message(err.message);}finally{$(id).disabled=false;}});}
-async function refresh(){
- const [products,collections,media]=await Promise.all(['products','collections','media'].map(p=>api(p)));
- $('catalogue').textContent=JSON.stringify({products,collections},null,2);
- $('media').replaceChildren(...media.map(m=>{const li=document.createElement('li');li.textContent=`${m.object_key} — ${m.width??'?'}×${m.height??'?'} — ${m.bytes} bytes — ${m.state} (protected master)`;return li;}));
-}
+async function refresh(){if(adminUI)await adminUI.reload();}
 async function workspace(){
- const staff=await api('session');role=staff.role;$('workspace').hidden=false;$('mfa').hidden=true;$('upload').disabled=role==='viewer';$('file').disabled=role==='viewer';message('Signed in as '+role);await refresh();
+ const staff=await api('session');role=staff.role;$('workspace').hidden=false;$('mfa').hidden=true;$('upload').disabled=role==='viewer';$('file').disabled=role==='viewer';message('Signed in as '+role);if(!adminUI)adminUI=mountAdmin(api,role,message);await refresh();
 }
 async function signedIn(){
  if(invitation||recovery)throw Error('Complete password setup first.');
@@ -27,7 +24,7 @@ async function signedIn(){
 try{
  const config=await (await fetch('/auth-config.json')).json();if(!config.url||!config.key)throw Error('Staging authentication is not configured.');
  client=createClient(config.url,config.key,{auth:{flowType:'pkce',persistSession:true,storage:authStorage(sessionStorage),detectSessionInUrl:false}});
- client.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){factor=null;role=null;recovery=false;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';$('qr').removeAttribute('src');$('qr').hidden=true;$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
+ client.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';$('qr').removeAttribute('src');$('qr').hidden=true;$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
  $('login').onsubmit=async e=>{e.preventDefault();try{checkResult(await client.auth.signInWithPassword({email:$('email').value,password:$('password').value}));$('password').value='';await signedIn();}catch(err){message(err.message);}};
  action('reset',async()=>{checkResult(await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/admin'}));message('If eligible, a recovery email has been sent. Open it in this browser.');});
  action('update-password',async()=>{if(!recovery)throw Error('Open a valid password recovery link first.');await recoverPassword(client.auth,$('new-password').value);$('new-password').value='';$('recovery').hidden=true;message('Password updated. Sign in again.');});

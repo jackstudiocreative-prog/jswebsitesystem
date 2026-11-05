@@ -19,6 +19,7 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.5.15",
-    "esbuild": "^0.28.2"
+    "esbuild": "^0.28.2",
+    "linkedom": "^0.18.15"
   }
 }

@@ -5,7 +5,7 @@ export function cloudAdapter(env=process.env){
  const {CLOUDINARY_CLOUD_NAME:cloud_name,CLOUDINARY_API_KEY:api_key,CLOUDINARY_API_SECRET:api_secret,CLOUDINARY_UPLOAD_PRESET:preset}=env;
  if(!cloud_name||!api_key||!api_secret||!preset)throw new HttpError(503,'Media service not configured');
  const options={cloud_name,api_key,api_secret,secure:true,timeout:8000};
- return {cloud_name,api_key,preset,sign:p=>cloudinary.utils.api_sign_request(p,api_secret),
+ return {cloud_name,api_key,preset,preview:m=>cloudinary.utils.private_download_url(m.object_key,m.format,{...options,type:'authenticated',expires_at:Math.floor(Date.now()/1000)+300,attachment:false}),sign:p=>cloudinary.utils.api_sign_request(p,api_secret),
   inspect:id=>cloudinary.api.resource(id,{...options,resource_type:'image',type:'authenticated'})};
 }
 export function validateAsset(asset,publicId){
