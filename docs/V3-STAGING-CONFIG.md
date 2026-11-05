@@ -1,6 +1,6 @@
 # Staff Auth and Cloudinary staging code
 
-This change builds on OPEN PR #2 and PR #3. No hosted SQL, deployment, Shopify operation,
+PR #2, #3 and #4 are merged. This guide describes their staging foundation. No hosted SQL, deployment, Shopify operation,
 DNS change, Cloudinary upload or payment configuration has been performed by this work.
 Project reference supplied by owner: `cquhddsrhnacbkvszitl` (Singapore).
 
@@ -33,6 +33,7 @@ In Vercel Preview environment for the isolated Staging project, prepare:
 | AUTH_AUDIENCE | authenticated | server |
 | AUTH_JWKS_URL | https://cquhddsrhnacbkvszitl.supabase.co/auth/v1/.well-known/jwks.json | server |
 | DATABASE_URL | Supabase transaction-pooler URL for dedicated runtime login, sslmode=verify-full | secret |
+| DATABASE_CA_CERT | Complete trusted Supabase PEM CA certificate text, not a Windows file path | server only |
 | CLOUDINARY_CLOUD_NAME | API credentials page for Test environment, not console URL identifier | server/public signature response |
 | CLOUDINARY_API_KEY | same Test environment | server/public signature response |
 | CLOUDINARY_API_SECRET | same Test environment | server secret only |
@@ -43,6 +44,10 @@ not browser bundles or normal Vercel runtime. Do not paste any secret into chat 
 Build emits only SUPABASE_URL and the publishable key. Never provide service-role keys there.
 Root Directory remains `v3`, include source files outside Root Directory, Node 22.x,
 build `npm run build`, output `public`. Current production-environment API guard remains enabled.
+
+See [Vercel TLS and Preview policy](V3-VERCEL-TLS.md) for required CA configuration and branch guards.
+The owner reports migrations 001–003 and restricted-login tests already completed in Staging;
+do not repeat the database setup below on that existing project.
 
 ## Later authorized database/auth setup
 

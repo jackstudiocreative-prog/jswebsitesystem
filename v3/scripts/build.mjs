@@ -1,6 +1,8 @@
 import { mkdir,copyFile } from 'node:fs/promises';
 import { writeFile } from 'node:fs/promises';
 import { build } from 'esbuild';
+import { allowPreview } from './preview-policy.mjs';
+if(process.env.VERCEL && !allowPreview(process.env))throw Error('Only staging branch Preview builds are enabled');
 const root=new URL('../',import.meta.url);
 await mkdir(new URL('public/admin/',root),{recursive:true});
 await copyFile(new URL('web/index.html',root),new URL('public/index.html',root));

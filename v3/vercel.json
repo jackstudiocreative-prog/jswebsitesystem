@@ -1,6 +1,8 @@
 {
  "$schema":"https://openapi.vercel.sh/vercel.json",
  "framework":null,
+ "git":{"deploymentEnabled":{"**":false,"main":false,"update/v3-tls-ca":false,"staging":true}},
+ "ignoreCommand":"node scripts/preview-policy.mjs",
  "installCommand":"npm ci",
  "buildCommand":"npm run build",
  "outputDirectory":"public",
