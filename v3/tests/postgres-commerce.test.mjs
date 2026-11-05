@@ -51,10 +51,13 @@ test('real PostgreSQL: concurrent checkouts, duplicate callbacks and product sav
   const writer=await pool.connect();
   try{
    await writer.query('BEGIN');await writer.query('SELECT id FROM products WHERE id=$1 FOR UPDATE',[p.id]);
+   const writerPid=(await writer.query('SELECT pg_backend_pid() AS pid')).rows[0].pid;
    const waiting=request('storefront/checkout','POST',makeOrder(`price-${run}@example.com`),null);
    let blocked=false;
    for(let i=0;i<100;i++){
-    const monitor=await pool.connect();try{blocked=(await monitor.query("SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE 'SELECT id FROM products WHERE id = ANY%') AS waiting")).rows[0].waiting;}finally{monitor.release();}
+    // SQL text in pg_stat_activity is intentionally hidden from the restricted API role.
+    // Observe the lock relationship directly without requiring pg_read_all_stats privileges.
+    const monitor=await pool.connect();try{blocked=(await monitor.query('SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))) AS waiting',[writerPid])).rows[0].waiting;}finally{monitor.release();}
     if(blocked)break;await new Promise(r=>setTimeout(r,20));
    }
    assert.ok(blocked,'checkout is waiting for the staff product lock');
