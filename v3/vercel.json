@@ -10,7 +10,8 @@
  "rewrites":[
   {"source":"/api/v3/:path*","destination":"/api/index"},
   {"source":"/health","destination":"/api/index"},
-  {"source":"/admin","destination":"/admin/index.html"}
+  {"source":"/admin","destination":"/admin/index.html"},
+  {"source":"/pages/:slug","destination":"/page.html"}
  ],
  "headers":[{"source":"/(.*)","headers":[
   {"key":"X-Robots-Tag","value":"noindex, nofollow"},

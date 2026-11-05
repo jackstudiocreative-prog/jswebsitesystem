@@ -1,0 +1,30 @@
+/* Website Editor sections. Extends the V2 storefront styles (/styles.css): same cream ground, Impact
+   display headings, Inter body and the #a97845 button. No pure black. */
+.js-body{margin:0;background:#fcfaf6;color:#2f322c;font-family:Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",Arial,sans-serif}
+.js-page h1,.js-page h2{color:#2f322c;margin:0 0 16px}
+.js-eyebrow{font-size:11px;letter-spacing:2px;font-weight:700;color:#8e9c88;margin:0 0 12px;text-transform:uppercase}
+.js-page .store-button{text-decoration:none;align-items:center}
+.js-hero{position:relative;min-height:460px;display:flex;align-items:center;overflow:hidden;background:linear-gradient(90deg,#24241f,#3a3830 60%,#5a554a)}
+.js-hero-image{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.js-hero-shade{position:absolute;inset:0;background:linear-gradient(90deg,rgba(24,24,21,.86),rgba(34,33,28,.45) 55%,rgba(24,24,21,.08))}
+.js-hero-content{position:relative;z-index:1;padding:56px max(8%,25px);color:#fff;max-width:650px}
+.js-hero-content h1{font-family:Impact,'Arial Narrow',sans-serif;font-size:64px;line-height:.98;letter-spacing:1.5px;font-weight:600;color:#fff;margin:0 0 20px}
+.js-hero-content p{font-size:14px;color:#e3e4de;line-height:1.8;max-width:420px;margin:0}
+.js-hero.js-align-center{justify-content:center;text-align:center}.js-hero.js-align-center .js-hero-content p{margin:0 auto}
+.js-split{display:grid;grid-template-columns:1fr 1fr;gap:48px;align-items:center}
+.js-image-right .js-split-image{order:2}
+.js-split-image{width:100%;aspect-ratio:4/3;object-fit:cover;border-radius:4px;background:#ebe6dc}
+.js-split-copy{line-height:1.85;font-size:15px;color:#55534f}.js-split-copy h2{font-size:34px;line-height:1.15}
+.js-section-title{font-size:30px;text-align:center}.js-section-intro{text-align:center;color:#55534f;max-width:640px;margin:0 auto 28px;line-height:1.8}
+.js-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:22px;margin-top:24px}
+.js-card{display:flex;flex-direction:column;gap:8px;color:#2f322c;text-decoration:none}
+.js-card-image{width:100%;aspect-ratio:1/1;object-fit:cover;background:#ebe6dc;border-radius:3px}
+.js-card-title{font-size:14px;font-weight:600}.js-card-price{font-size:13px;color:#6b6760}
+.js-image-placeholder{display:block;background:linear-gradient(135deg,#ece7dd,#e2dccf)}
+.js-banner{padding:44px max(6%,22px);text-align:center}.js-banner p{font-size:20px;line-height:1.5;max-width:760px;margin:0 auto}
+.js-theme-light{background:#f1ede4;color:#2f322c}.js-theme-dark{background:#2f322c;color:#f4f1ea}.js-theme-accent{background:#a97845;color:#fff}
+.js-theme-accent .js-banner-button{background:#fcfaf6;color:#6e4a26}
+.js-rich{max-width:800px;margin:0 auto;line-height:1.9;font-size:15px;color:#55534f}.js-rich h1{font-size:38px;line-height:1.2}.js-rich.js-align-center{text-align:center}
+.js-empty{color:#8a877f;font-size:14px;text-align:center}
+@media(max-width:900px){.js-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.js-split{grid-template-columns:1fr;gap:24px}.js-image-right .js-split-image{order:0}.js-hero-content h1{font-size:46px}}
+@media(max-width:520px){.js-hero{min-height:380px}.js-hero-content h1{font-size:38px}.js-grid{gap:14px}.js-split-copy h2,.js-section-title{font-size:26px}.js-rich h1{font-size:30px}.js-banner p{font-size:17px}}
