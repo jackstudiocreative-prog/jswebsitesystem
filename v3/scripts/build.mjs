@@ -8,6 +8,7 @@ await mkdir(new URL('public/admin/',root),{recursive:true});
 await copyFile(new URL('web/index.html',root),new URL('public/index.html',root));
 await copyFile(new URL('admin/index.html',root),new URL('public/admin/index.html',root));
 await copyFile(new URL('../../jackstudio-admin-mvp/public/styles.css',import.meta.url),new URL('public/styles.css',root));
+await copyFile(new URL('admin/catalog.css',root),new URL('public/catalog.css',root));
 const url=process.env.SUPABASE_URL??'',key=process.env.SUPABASE_PUBLISHABLE_KEY??'';
 if(url&&new URL(url).protocol!=='https:')throw Error('HTTPS Supabase URL required');
 if(key&&!key.startsWith('sb_publishable_'))throw Error('Only a Supabase publishable key may enter the browser build');
