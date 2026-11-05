@@ -7,7 +7,8 @@
     "migrate": "node src/migrate.mjs",
     "start": "node src/server.mjs",
     "build": "node scripts/build.mjs",
-    "e2e": "node scripts/build.mjs && playwright test"
+    "e2e": "node scripts/build.mjs && playwright test",
+    "demo": "node scripts/build.mjs && node scripts/e2e-server.mjs --demo"
   },
   "engines": {
     "node": ">=22.13.0"

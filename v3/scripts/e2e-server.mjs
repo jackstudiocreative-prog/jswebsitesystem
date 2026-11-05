@@ -9,7 +9,9 @@ import {PGlite} from '@electric-sql/pglite';
 import {migrate} from '../src/migrate.mjs';
 import {handler} from '../src/handler.mjs';
 import {testGateway} from '../src/payments.mjs';
-if(process.env.E2E_HARNESS!=='1')throw Error('E2E harness only (set E2E_HARNESS=1)');
+// `--demo` (npm run demo) also seeds sample products and pages for hands-on testing.
+const demo=process.argv.includes('--demo');
+if(process.env.E2E_HARNESS!=='1'&&!demo)throw Error('Test harness only (set E2E_HARNESS=1 or run npm run demo)');
 const root=new URL('../',import.meta.url),port=Number(process.env.E2E_PORT??4317);
 const config=JSON.parse(await readFile(new URL('vercel.json',root),'utf8'));
 // vercel.json patterns -> RegExp (":name*" any, ":name" one segment; groups are already regex).
@@ -32,4 +34,17 @@ createServer(async(req,res)=>{
  if(target==='/admin.js'){res.setHeader('Content-Type','text/javascript');return res.end(adminJs);}
  try{const file=await readFile(new URL('public'+(target.endsWith('/')?target+'index.html':target),root));res.setHeader('Content-Type',types[target.slice(target.lastIndexOf('.'))]??'application/octet-stream');res.end(file);}
  catch{res.statusCode=404;res.end('Not found');}
-}).listen(port,'127.0.0.1',()=>console.log('e2e harness on',port));
+}).listen(port,'127.0.0.1',async()=>{
+ if(!demo)return console.log('e2e harness on',port);
+ const call=async(path,body,method='POST',role='editor')=>{const r=await fetch(`http://127.0.0.1:${port}/api/v3/`+path,{method,headers:{Authorization:'Bearer '+role,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const j=await r.json();if(!r.ok)throw Error(path+': '+j.error);return j;};
+ const wallets=await call('collections',{title:'Wallets & Small Leather',status:'active',position:1}),travel=await call('collections',{title:'Travel',status:'active',position:2});
+ await call('products',{title:'Card Holder',status:'active',description:'Full-grain leather card holder with four slots.\n\nHand-finished edges.',collection_ids:[String(wallets.id)],option_names:['Color'],media:[{media_id:'1',alt:'Card holder in brown'},{media_id:'2',alt:'Card holder in black'}],variants:[{option_values:['Brown'],sku:'JS-CH-BRN',price_minor:12900,inventory:12,media_id:'1'},{option_values:['Black'],sku:'JS-CH-BLK',price_minor:12900,inventory:3,media_id:'2'},{option_values:['Tan'],sku:'JS-CH-TAN',price_minor:13900,inventory:0}]});
+ await call('products',{title:'Slim Wallet',status:'active',collection_ids:[String(wallets.id)],sku:'JS-SW-01',price_minor:3900,inventory:20});
+ await call('products',{title:'Weekender Duffel',status:'active',collection_ids:[String(travel.id)],sku:'JS-WK-01',price_minor:69900,inventory:5,shipping_profile:'luggage',weight_grams:2500,media:[{media_id:'3',alt:'Weekender duffel'}]});
+ await call('products',{title:'Everyday Tote (draft)',status:'draft',collection_ids:[String(wallets.id)],sku:'JS-TT-01',price_minor:45900,inventory:4});
+ const {TEMPLATES}=await import('../shared/page-schema.mjs');
+ const home=await call('pages',TEMPLATES.home.build());await call(`pages/${home.id}/publish`,{revision:home.revision});
+ await call('pages',TEMPLATES['brand-story'].build());
+ const b=`http://127.0.0.1:${port}`;
+ console.log(`\nJack Studio V3 — local simulation (in-memory data, resets when stopped; mock eGHL, no real money)\n\n  Staff workspace (editor): ${b}/admin\n  Staff workspace (viewer): ${b}/admin?role=viewer\n  Website home:             ${b}/pages/home\n  Product page:             ${b}/products/card-holder\n  Bag:                      ${b}/cart\n\nPress Ctrl+C to stop.\n`);
+});
