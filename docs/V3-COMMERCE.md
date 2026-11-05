@@ -72,8 +72,9 @@ Without valid settings checkout returns 503 "Checkout is not configured".
 
 1. Request eGHL **sandbox** credentials (Service ID, merchant password, test payment URL) and the
    merchant integration document. Put them only in Vercel Staging environment variables.
-2. **Confirm the response hash field order** against the eGHL document (`src/payments.mjs`
-   `responseHash` / `responseHash2`). The request hash matches eGHL's published SDK usage.
+2. **Confirm request AND response hash field order** against the applicable official merchant
+   document (`src/payments.mjs`). Both are unverified candidates; mock tests prove only internal
+   consistency. See [V3-AUDIT.md](V3-AUDIT.md); Sandbox opt-in is now required as well.
 3. Register the callback URL `https://<staging>/api/v3/payments/eghl/callback` if eGHL requires it.
 4. Test in sandbox: success, failure, cancel, FPX pending, duplicate callback, amount tamper, late payment.
 

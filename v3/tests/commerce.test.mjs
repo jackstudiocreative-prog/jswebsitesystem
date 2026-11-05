@@ -4,17 +4,19 @@ import {createHash,randomUUID,randomBytes} from 'node:crypto';
 import {PGlite} from '@electric-sql/pglite';
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
+import {Readable} from 'node:stream';
 import {migrate} from '../src/migrate.mjs';
 import {handler} from '../src/handler.mjs';
 import {testGateway,paymentAdapter,requestHash,responseHash2} from '../src/payments.mjs';
 
 const SECRET='s'.repeat(40);
+const MAINTENANCE_SECRET='maintenance-test-'.repeat(3);
 const gateway=testGateway({provider:'mock',serviceId:'JSMOCK',password:SECRET,actionUrl:'https://pay.test/mock',baseUrl:'https://shop.test'});
 async function harness(){
  const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  await migrate(sql);await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");
  await db.query('SET ROLE jackstudio_api');
- const pool={connect:async()=>({...sql,release(){}})},server=createServer(handler(pool,async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false}));
+ const pool={connect:async()=>({...sql,release(){}})},handle=handler(pool,async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false,maintenanceSecret:MAINTENANCE_SECRET}),server=createServer(handle);
  await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const base='http://127.0.0.1:'+server.address().port+'/api/v3/';
  const request=async(path,method='GET',body,token='editor')=>{const headers={'Content-Type':'application/json'};if(token)headers.Authorization='Bearer '+token;const r=await fetch(base+path,{method,headers,redirect:'manual',...(body?{body:JSON.stringify(body)}:{})});const text=await r.text();let json;try{json=JSON.parse(text);}catch{json=text;}return {status:r.status,body:json,headers:r.headers};};
@@ -26,7 +28,13 @@ async function harness(){
  const luggage=await mk({title:'Cabin Luggage',status:'active',sku:'L-1',price_minor:39900,inventory:5,shipping_profile:'luggage',weight_grams:3000});
  const light=await mk({title:'Luggage Tag',status:'active',sku:'L-2',price_minor:2000,inventory:5,shipping_profile:'luggage',weight_grams:0});
  const draft=await mk({title:'Prototype',status:'draft',sku:'D-1',price_minor:100,inventory:5});
- return {db,request,form,wallet,luggage,light,draft,close:async()=>{await new Promise(r=>server.close(r));await db.close();}};
+ // Exercise the real handler, transactions and RLS after Vercel has populated req.body.
+ const invoke=async(path,body,headers={'content-type':'application/json'},chunks=[])=>{
+  const req=Object.assign(Readable.from(chunks),{url:'/api/v3/'+path,method:'POST',headers,...(body!==undefined?{body}:{})});
+  const res={statusCode:200,headers:{},setHeader(k,v){this.headers[k]=v;},end(v){this.body=v;}};
+  await handle(req,res);let result;try{result=JSON.parse(res.body);}catch{result=res.body;}return {status:res.statusCode,body:result,headers:res.headers};
+ };
+ return {db,request,form,invoke,wallet,luggage,light,draft,close:async()=>{await new Promise(r=>server.close(r));await db.close();}};
 }
 const customer={name:'Aisyah Rahman',email:'Aisyah@example.com',phone:'+60 12-345 6789',address_line1:'12 Jalan Klang',city:'Klang',postcode:'41000',state:'Selangor'};
 const order=(lines,extra={})=>({idempotency_key:randomUUID(),access_token:randomBytes(24).toString('base64url'),customer,lines,...extra});
@@ -34,11 +42,93 @@ const stock=async(db,variant)=>(await db.query('SELECT inventory FROM product_va
 const balanced=async db=>(await db.query('SELECT bool_and(v.inventory=coalesce((SELECT sum(delta) FROM inventory_adjustments a WHERE a.variant_id=v.id),0)) AS ok FROM product_variants v')).rows[0].ok;
 const signed=(fields,overrides={})=>{const f={...fields,...overrides};delete f.HashValue2;return {...f,HashValue2:responseHash2(SECRET,f)};};
 
-test('eGHL request hash, configuration guard and mock-only-on-staging',()=>{
+test('Vercel parsed JSON, strings, Buffers and split UTF-8 streams preserve nested checkout data',async()=>{
+ const {invoke,db,wallet,close}=await harness();
+ try{
+  const input={lines:[{variant_id:wallet.variant.id,quantity:1}]};
+  const raw=JSON.stringify(input);
+  for(const body of [input,raw,Buffer.from(raw)]){
+   const r=await invoke('storefront/cart',body);assert.equal(r.status,200);assert.equal(r.body.total_minor,5000);
+  }
+  const checkoutInput=order(input.lines,{customer:{...customer,name:'测试 Käufer'}}),encoded=Buffer.from(JSON.stringify(checkoutInput));
+  const split=encoded.indexOf(Buffer.from('测试'))+1;
+  const created=await invoke('storefront/checkout',undefined,{'content-type':'application/json; charset=utf-8'},[encoded.subarray(0,split),encoded.subarray(split)]);
+  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.order.customer_name,'测试 Käufer');
+  const again=await invoke('storefront/checkout',checkoutInput);assert.equal(again.status,201);assert.equal(again.body.order.number,created.body.order.number);
+  const number=created.body.order.number;
+  assert.equal((await invoke(`storefront/orders/${number}/status`,{access_token:checkoutInput.access_token})).status,200);
+  assert.equal((await invoke(`storefront/orders/${number}/pay`,{access_token:checkoutInput.access_token})).status,200);
+  assert.equal((await invoke('payments/mock/complete',{number,access_token:checkoutInput.access_token,outcome:'approve'})).status,200);
+  assert.equal((await invoke(`storefront/orders/${number}/status`,{access_token:checkoutInput.access_token})).body.order.status,'paid');
+  assert.equal((await invoke('products',{title:'Parsed JSON staff write',variants:[{option_values:[],price_minor:123,inventory:1}]},{'content-type':'application/json',authorization:'Bearer editor'})).status,201);
+  for(const body of [null,[],{},'{invalid'])assert.equal((await invoke('storefront/cart',body)).status,400);
+  assert.equal((await invoke('storefront/cart',input,{'content-type':'application/json-evil'})).status,415);
+  for(const body of [{nested:{large:'界'.repeat(22000)}},Buffer.alloc(65537,'x'),'x'.repeat(65537)])assert.equal((await invoke('storefront/cart',body)).status,413);
+  assert.equal((await invoke('storefront/cart',undefined,{'content-type':'application/json'},[Buffer.alloc(65536),Buffer.from('x')])).status,413);
+  assert.equal(await stock(db,wallet.variant),2);assert.ok(await balanced(db));
+ }finally{await close();}
+});
+
+test('Vercel parsed gateway forms verify; duplicate, nested and JSON forms are rejected; event data is allowlisted',async()=>{
+ const {invoke,db,wallet,close}=await harness();
+ try{
+  const created=(await invoke('storefront/checkout',order([{variant_id:wallet.variant.id,quantity:1}]))).body;
+  const fields=signed({ServiceID:'JSMOCK',PaymentID:created.payment.fields.PaymentID,OrderNumber:created.order.number,Amount:'50.00',CurrencyCode:'MYR',TxnID:'FORM',AuthCode:'A',TxnStatus:'0',Param6:'',Param7:''});
+  const formHeaders={'content-type':'application/x-www-form-urlencoded; charset=utf-8'};
+  assert.equal((await invoke('payments/mock/callback',fields)).status,415);
+  assert.equal((await invoke('payments/mock/callback',{...fields,Amount:['50.00','1.00']},formHeaders)).status,400);
+  assert.equal((await invoke('payments/mock/callback',new URLSearchParams(fields).toString()+'&Amount=1.00',formHeaders)).status,400);
+  assert.equal((await invoke('payments/mock/callback',signed({...fields,OrderNumber:'JSW999'}),formHeaders)).status,400);
+  const paid=await invoke('payments/mock/callback',{...fields,CardNumber:'test-card-data',CustomerEmail:'private@example.com',UnexpectedSecret:'never store'},formHeaders);
+  assert.equal(paid.status,200);assert.equal(paid.body,'OK');
+  assert.equal((await invoke('payments/mock/callback',Buffer.from(new URLSearchParams(fields).toString()),formHeaders)).status,200);
+  const events=(await db.query('SELECT payload FROM payment_events')).rows;
+  for(const {payload} of events)for(const k of ['HashValue2','AuthCode','CardNumber','CustomerEmail','UnexpectedSecret'])assert.equal(k in payload,false);
+ }finally{await close();}
+});
+
+test('scheduled expiry runs without shopping requests, is repeatable, and bounds duplicate bank-pending holds',async()=>{
+ const {invoke,db,wallet,close}=await harness();
+ try{
+  const a=(await invoke('storefront/checkout',order([{variant_id:wallet.variant.id,quantity:1}]))).body;
+  const b=(await invoke('storefront/checkout',order([{variant_id:wallet.variant.id,quantity:1}]))).body;
+  const c=(await invoke('storefront/checkout',order([{variant_id:wallet.variant.id,quantity:1}]))).body;
+  await db.query("UPDATE orders SET expires_at=now()-interval '1 minute'");
+  await db.query("UPDATE payments SET status='pending' WHERE payment_ref=$1",[b.payment.fields.PaymentID]);
+  await db.query("UPDATE payments SET status='pending',created_at=now()-interval '25 hours',updated_at=now() WHERE payment_ref=$1",[c.payment.fields.PaymentID]);
+  await db.query("INSERT INTO rate_limits VALUES ($1,now()-interval '2 days',1)",['cart:'+'a'.repeat(64)]);
+  const sweep=()=>invoke('maintenance/expire-orders',undefined,{authorization:'Bearer '+MAINTENANCE_SECRET});
+  let r=await sweep();assert.equal(r.status,200,JSON.stringify(r.body));assert.equal(r.body.expired,2);assert.equal(r.body.more,false);
+  assert.equal(await stock(db,wallet.variant),2);
+  const statuses=(await db.query('SELECT number,status FROM orders ORDER BY id')).rows;
+  assert.deepEqual(statuses,[{number:a.order.number,status:'expired'},{number:b.order.number,status:'pending_payment'},{number:c.order.number,status:'expired'}]);
+  assert.equal((await db.query('SELECT count(*)::int AS n FROM rate_limits')).rows[0].n,0);
+  r=await sweep();assert.equal(r.body.expired,0);assert.equal(await stock(db,wallet.variant),2);
+  assert.equal((await db.query("SELECT count(*)::int AS n FROM inventory_adjustments WHERE reason='sale_released'")).rows[0].n,2);assert.ok(await balanced(db));
+ }finally{await close();}
+});
+
+test('maintenance drains bounded batches and reports a backlog for scheduler retries',async()=>{
+ const {invoke,db,wallet,close}=await harness();
+ try{
+  const adjusted=await invoke('inventory/adjustments',{variant_id:wallet.variant.id,delta:60,reason:'received'},{'content-type':'application/json',authorization:'Bearer editor'});assert.equal(adjusted.status,201);
+  for(let i=0;i<51;i++)assert.equal((await invoke('storefront/checkout',order([{variant_id:wallet.variant.id,quantity:1}],{customer:{...customer,email:`batch-${i}@example.com`}}))).status,201);
+  await db.query("UPDATE orders SET expires_at=now()-interval '1 minute'");
+  const sweep=()=>invoke('maintenance/expire-orders',undefined,{authorization:'Bearer '+MAINTENANCE_SECRET});
+  const first=await sweep();assert.equal(first.body.expired,50);assert.equal(first.body.more,true);assert.equal(first.body.due,1);assert.ok(first.body.oldest_due_at);
+  const second=await sweep();assert.equal(second.body.expired,1);assert.equal(second.body.more,false);assert.equal((await sweep()).body.expired,0);
+  assert.equal(await stock(db,wallet.variant),63);assert.ok(await balanced(db));
+ }finally{await close();}
+});
+
+test('candidate eGHL request hash, configuration guard and mock-only-on-staging',()=>{
  const f={ServiceID:'SIT',PaymentID:'JSW1P1',MerchantReturnURL:'https://a/r',MerchantCallBackURL:'https://a/c',Amount:'49.00',CurrencyCode:'MYR',CustIP:'1.2.3.4',PageTimeout:'900'};
  assert.equal(requestHash('pw',f),createHash('sha256').update('pwSITJSW1P1https://a/rhttps://a/c49.00MYR1.2.3.4900').digest('hex'));
  for(const env of [{},{PUBLIC_BASE_URL:'http://x.test',PAYMENT_PROVIDER:'mock',APP_ENV:'staging',MOCK_PAYMENT_SECRET:SECRET},{PUBLIC_BASE_URL:'https://x.test',PAYMENT_PROVIDER:'mock',APP_ENV:'production',MOCK_PAYMENT_SECRET:SECRET},{PUBLIC_BASE_URL:'https://x.test',PAYMENT_PROVIDER:'eghl',EGHL_SERVICE_ID:'S',EGHL_PASSWORD:'p',EGHL_PAYMENT_URL:'http://insecure'}])assert.throws(()=>paymentAdapter(env),e=>e.status===503);
- assert.equal(paymentAdapter({PUBLIC_BASE_URL:'https://x.test',PAYMENT_PROVIDER:'eghl',EGHL_SERVICE_ID:'S',EGHL_PASSWORD:'p',EGHL_PAYMENT_URL:'https://test.example/Payment.aspx'}).provider,'eghl');
+ const eghl={PUBLIC_BASE_URL:'https://x.test',PAYMENT_PROVIDER:'eghl',EGHL_SERVICE_ID:'S',EGHL_PASSWORD:'p',EGHL_PAYMENT_URL:'https://test.example/Payment.aspx'};
+ assert.throws(()=>paymentAdapter(eghl),e=>e.status===503);
+ assert.equal(paymentAdapter({...eghl,APP_ENV:'staging',EGHL_SANDBOX_ENABLED:'true'}).provider,'eghl');
+ assert.throws(()=>paymentAdapter({...eghl,APP_ENV:'production',EGHL_SANDBOX_ENABLED:'true'}),e=>e.status===503);
 });
 
 test('shipping copies the Shopify rules: RM5, free from RM49, luggage RM26.90 for 1–50 kg, summed per profile',async()=>{
@@ -107,11 +197,12 @@ test('gateway callbacks: verified success once, duplicates, tampering, amount mi
 });
 
 test('unpaid orders expire and release stock; late payments re-reserve or flag for staff',async()=>{
- const {db,request,form,wallet,close}=await harness();
+ const {db,request,form,invoke,wallet,close}=await harness();
  try{
   const a=order([{variant_id:wallet.variant.id,quantity:3}]);const ra=(await request('storefront/checkout','POST',a,null)).body;
   assert.equal(await stock(db,wallet.variant),0);
   await db.query("RESET ROLE");await db.query("UPDATE orders SET expires_at=now()-interval '1 minute'");await db.query('SET ROLE jackstudio_api');
+  const sweep=await invoke('maintenance/expire-orders',undefined,{authorization:'Bearer '+MAINTENANCE_SECRET});assert.equal(sweep.status,200);assert.equal(sweep.body.expired,1);
   assert.equal((await request(`storefront/orders/${ra.order.number}/status`,'POST',{access_token:a.access_token},null)).body.order.status,'expired');
   assert.equal(await stock(db,wallet.variant),3,'released');
   // Someone else buys 2; the expired order is then paid: only 1 left, so staff are alerted.
@@ -120,6 +211,8 @@ test('unpaid orders expire and release stock; late payments re-reserve or flag f
   assert.equal((await form('payments/mock/callback',signed(late))).text,'OK');
   const detail=(await request('orders?status=attention')).body.items[0];assert.equal(detail.number,ra.order.number);assert.equal(detail.status,'paid');
   const full=(await request('orders/'+detail.id)).body;assert.match(full.attention_note,/not enough stock/);
+  assert.equal((await request(`orders/${detail.id}/fulfil`,'POST',{revision:full.revision})).status,409,'stock issue must be resolved');
+  assert.equal((await request(`orders/${detail.id}/refunds`,'POST',{revision:full.revision,amount_minor:13500,reference:'LATE-REFUND',restock:true})).status,200);
   assert.equal(await stock(db,wallet.variant),1,'no negative stock');assert.ok(await balanced(db));
  }finally{await close();}
 });

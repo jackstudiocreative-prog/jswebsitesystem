@@ -75,10 +75,12 @@ test('pages: draft, preview, publish, unpublish, version restore, redirects and 
   // Editing the draft does not change the live page until published again.
   page=(await request('pages/'+id)).body;
   r=await request('pages/'+id,'PATCH',{revision:page.revision,title:'Home v2',slug:'welcome',sections:[section('rich_text',{body:'New copy'})]});assert.equal(r.status,200);assert.equal(r.body.status,'changes');
-  pub=(await request('storefront/pages/welcome','GET',undefined,null)).body;assert.equal(pub.page.title,'Home','live content unchanged');
-  assert.deepEqual((await request('storefront/pages/home','GET',undefined,null)).body,{redirect_to:'welcome'},'old URL redirects');
-  page=(await request('pages/'+id)).body;assert.deepEqual(page.redirects.map(x=>x.from_slug),['home']);
+  pub=(await request('storefront/pages/home','GET',undefined,null)).body;assert.equal(pub.page.title,'Home','live URL and content unchanged');
+  assert.equal((await request('storefront/pages/welcome','GET',undefined,null)).status,404,'draft URL is private');
+  assert.equal((await request('pages','POST',{title:'Cannot steal live URL',slug:'home'})).status,409);
+  page=(await request('pages/'+id)).body;assert.deepEqual(page.redirects,[],'no redirect before publishing');
   r=await request('pages/'+id+'/publish','POST',{revision:page.revision});assert.equal(r.status,200);
+  assert.deepEqual((await request('storefront/pages/home','GET',undefined,null)).body,{redirect_to:'welcome'},'old URL redirects only after publishing');
   pub=(await request('storefront/pages/welcome','GET',undefined,null)).body;assert.equal(pub.page.title,'Home v2');
   // Restore version 1 as a draft, then publish it: rollback with full history kept.
   page=(await request('pages/'+id)).body;assert.deepEqual(page.revisions.map(v=>[v.number,v.live]),[[2,true],[1,false]]);
@@ -89,12 +91,14 @@ test('pages: draft, preview, publish, unpublish, version restore, redirects and 
   page=(await request('pages/'+id)).body;assert.equal(page.revisions.length,3);
   // Another page may claim the old slug; the redirect then stops.
   r=await request('pages','POST',{title:'Home',slug:'home'});assert.equal(r.status,201);
-  assert.equal((await request('storefront/pages/home','GET',undefined,null)).status,404,'new page is still a draft');
+  assert.deepEqual((await request('storefront/pages/home','GET',undefined,null)).body,{redirect_to:'welcome'},'new draft does not remove live redirect');
+  await request('pages/'+r.body.id+'/publish','POST',{revision:r.body.revision});
+  assert.equal((await request('storefront/pages/home','GET',undefined,null)).body.page.title,'Home','new page takes the URL when published');
   // Unpublish removes it from the public site.
   r=await request('pages/'+id+'/unpublish','POST',{revision:page.revision});assert.equal(r.status,200);assert.equal(r.body.status,'draft');
   assert.equal((await request('storefront/pages/welcome','GET',undefined,null)).status,404);
   assert.equal((await request('pages/'+id+'/unpublish','POST',{revision:r.body.revision})).status,400);
-  const list=(await request('pages?q=home&status=draft')).body;assert.equal(list.total,2);
+  const list=(await request('pages?q=home&status=draft')).body;assert.equal(list.total,1);
   for(const [path,method] of [['pages/'+id,'DELETE'],['pages/'+id+'/publish','GET'],['pages/'+id+'/preview','POST'],['storefront/pages/welcome','POST']])assert.equal((await request(path,method,method==='GET'?undefined:{})).status,405,path+' '+method);
   assert.equal((await request('pages','GET',undefined,null)).status,401);
   // History is append-only for the API role.

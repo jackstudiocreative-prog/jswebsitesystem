@@ -1,5 +1,8 @@
 # V3 Phase 5 — Abuse protection, SEO, order emails, browser E2E and security headers
 
+See the later [corrective audit](V3-AUDIT.md) for repaired request parsing, concurrent checkout,
+independent expiry, published URL isolation, protocol uncertainty and remaining release blockers.
+
 ## Branch and release boundary
 
 Stacked on PR #10 (`update/v3-commerce`). Merge order: **#6 → #7 → #8 → #9 → #10 → this PR**.

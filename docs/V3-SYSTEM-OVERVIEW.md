@@ -1,5 +1,9 @@
 # Jack Studio Independent E-commerce System V3 — Overview and acceptance checklist
 
+Latest corrective audit: [V3-AUDIT.md](V3-AUDIT.md). It supersedes earlier expiry and eGHL
+readiness claims: scheduled cleanup must be separately activated, both payment hash formats
+remain unverified, and public image delivery is still a release blocker.
+
 All V3 phases are built as stacked pull requests. Nothing is merged or deployed, and no V3 migration
 has been run on the hosted database. main, Production, Shopify and the live website are untouched.
 

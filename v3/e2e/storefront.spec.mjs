@@ -6,7 +6,7 @@ async function fillCheckout(page,email){
  await page.getByLabel('State').selectOption('Selangor');
 }
 test.beforeAll(async({request})=>seed(request));
-test('customer buys a variant, pays through the eGHL flow and sees the confirmed order',async({page})=>{
+test('customer buys a variant, pays through the mock gateway and sees the confirmed order',async({page})=>{
  const g=guard(page);
  await page.goto('/products/e2e-card-holder');
  await expect(page.getByRole('heading',{level:1,name:'E2E Card Holder'})).toBeVisible();await axe(page,'product');
