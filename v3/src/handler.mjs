@@ -5,6 +5,8 @@ import { adjust,inventoryList,adjustmentList } from './inventory.mjs';
 import { listPages,pageDetail,createPage,savePage,publishPage,unpublishPage,restoreRevision,previewPage,previewDraft,publicPage } from './pages.mjs';
 import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates,storefrontProduct } from './commerce.mjs';
 import { paymentAdapter } from './payments.mjs';
+import { limit } from './protect.mjs';
+import { sitemap,robots } from './seo.mjs';
 async function readBody(req){
  if(req.body!==undefined){const b=typeof req.body==='string'?req.body:Buffer.isBuffer(req.body)?req.body.toString('utf8'):req.body&&typeof req.body==='object'?new URLSearchParams(req.body).toString():'';if(Buffer.byteLength(b)>65536)throw new HttpError(413,'Request too large');return b;}
  let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>65536)throw new HttpError(413,'Request too large');}return body;
@@ -15,7 +17,12 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
  let db;
  try{
   const url=new URL(req.url,'http://localhost'),path=url.pathname;
-  if(path==='/health'&&req.method==='GET'){res.end('{"status":"ok","commerce":"not-connected"}');return;}
+  if(path==='/health'&&req.method==='GET'){res.end('{"status":"ok"}');return;}
+  if((path==='/sitemap.xml'||path==='/robots.txt')&&req.method==='GET'){
+   const base=process.env.PUBLIC_BASE_URL??options.baseUrl??'';
+   if(path==='/robots.txt'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300');res.end(robots(base,process.env.SITE_INDEXING==='on'));return;}
+   db=await pool.connect();res.setHeader('Content-Type','application/xml; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300');res.end(await sitemap(db,base));return;
+  }
   if(path==='/api/v3/storefront'&&req.method==='GET'){
    db=await pool.connect();
    const rows=(await db.query("SELECT p.id,p.title,p.handle,p.description FROM products p WHERE p.status='active' AND EXISTS(SELECT 1 FROM product_collections pc JOIN collections c ON c.id=pc.collection_id WHERE pc.product_id=p.id AND c.status='active') ORDER BY p.id LIMIT 200")).rows;
@@ -23,7 +30,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   }
   // Public published pages (no staff token). Drafts, hidden sections and private images are never exposed.
   const published=path.match(/^\/api\/v3\/storefront\/pages\/([^/]{1,100})$/);
-  if(published){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();res.end(JSON.stringify(await publicPage(db,published[1])));return;}
+  if(published){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicPage(db,published[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
   // Public storefront commerce: bag pricing, checkout and order status (the order access token stays in
   // the request body, never the URL).
   const shop=path.match(/^\/api\/v3\/storefront\/(products\/([a-z0-9-]{1,100})|cart|checkout|shipping-rates|orders\/(JSW\d{1,12})\/(status|pay))$/);
@@ -31,10 +38,13 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const kind=shop[1].startsWith('products/')?'product':shop[1].startsWith('orders/')?shop[4]:shop[1];
    if(req.method!==(['product','shipping-rates'].includes(kind)?'GET':'POST'))throw new HttpError(405,'Method not available');
    let input;if(req.method==='POST'){if(!req.headers['content-type']?.startsWith('application/json'))throw new HttpError(415,'JSON required');try{input=JSON.parse(await readBody(req));}catch(e){if(e.status)throw e;throw new HttpError(400,'Invalid JSON');}}
-   db=await pool.connect();await db.query('BEGIN');
+   db=await pool.connect();
+   // Counted outside the transaction so rejected attempts still count.
+   if(req.method==='POST'&&options.rateLimits!==false){await limit(db,kind==='checkout'?'checkout':kind==='pay'?'pay':kind==='status'?'status':'cart',clientIp(req));if(kind==='checkout'&&typeof input?.customer?.email==='string')await limit(db,'checkout-email',input.customer.email.trim());}
+   await db.query('BEGIN');
    const payments=()=>options.payments??paymentAdapter(process.env);
    const result=kind==='product'?await storefrontProduct(db,shop[2]):kind==='shipping-rates'?{rates:await shippingRates(db),currency:'MYR'}:kind==='cart'?await quoteBag(db,input):kind==='checkout'?await checkout(db,input,payments(),clientIp(req)):kind==='status'?await orderStatus(db,shop[3],input):await retryPayment(db,shop[3],input,payments(),clientIp(req));
-   await db.query('COMMIT');res.statusCode=kind==='checkout'?201:200;res.end(JSON.stringify(result));return;
+   await db.query('COMMIT');if(req.method==='GET')res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.statusCode=kind==='checkout'?201:200;res.end(JSON.stringify(result));return;
   }
   // Gateway messages. Every message is logged; only a verified signature can change a payment.
   const gw=path.match(/^\/api\/v3\/payments\/(eghl|mock)\/(callback|return|complete)$/);
@@ -44,7 +54,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(gw[2]==='complete'){
     if(req.method!=='POST'||!req.headers['content-type']?.startsWith('application/json'))throw new HttpError(405,'Method not available');
     let input;try{input=JSON.parse(await readBody(req));}catch(e){if(e.status)throw e;throw new HttpError(400,'Invalid JSON');}
-    db=await pool.connect();await db.query('BEGIN');const r=await mockComplete(db,input,payments);await db.query('COMMIT');res.end(JSON.stringify({ok:r.ok}));return;
+    db=await pool.connect();if(options.rateLimits!==false)await limit(db,'mock',clientIp(req));await db.query('BEGIN');const r=await mockComplete(db,input,payments);await db.query('COMMIT');res.end(JSON.stringify({ok:r.ok}));return;
    }
    if(!(req.method==='POST'||(req.method==='GET'&&gw[2]==='return')))throw new HttpError(405,'Method not available');
    const fields=Object.fromEntries(req.method==='GET'?url.searchParams:new URLSearchParams(await readBody(req)));

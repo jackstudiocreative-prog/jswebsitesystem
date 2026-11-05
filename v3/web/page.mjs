@@ -10,5 +10,7 @@ else fetch('/api/v3/storefront/pages/'+slug).then(async r=>{
  if(!r.ok||!data.page){message('Page not found');return;}
  const page=data.page;document.title=page.seo_title||`${page.title} | Jack Studio`;
  document.querySelector('meta[name=description]').setAttribute('content',page.seo_description||'');
+ for(const [k,v] of [['og:title',page.seo_title||page.title],['og:description',page.seo_description||''],['og:type','website']]){const m=document.createElement('meta');m.setAttribute('property',k);m.setAttribute('content',v);document.head.append(m);}
+ const link=document.createElement('link');link.rel='canonical';link.href=location.origin+'/pages/'+page.slug;document.head.append(link);
  root.innerHTML=renderPage(page,{});
 }).catch(()=>message('This page could not be loaded. Please try again.'));

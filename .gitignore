@@ -11,3 +11,5 @@ jackstudio-admin-mvp/public/uploads/*
 .DS_Store
 
 v3/public/
+v3/test-results/
+v3/playwright-report/

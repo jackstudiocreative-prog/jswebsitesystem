@@ -14,7 +14,7 @@ test('real PostgreSQL: concurrent checkouts, duplicate callbacks and product sav
  try{await migrate(owner);await owner.query("INSERT INTO staff VALUES ($1,'editor',true)",[editor]);}finally{await owner.end();}
  const SECRET='k'.repeat(40),payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:SECRET,actionUrl:'https://pay.test',baseUrl:'https://shop.test'});
  const pool=new pg.Pool({connectionString:process.env.TEST_DATABASE_URL,max:10});pool.on('connect',c=>{c.query('SET ROLE jackstudio_api');});
- const server=createServer(handler(pool,async sub=>({sub,aal:'aal2'}),{payments}));await new Promise(r=>server.listen(0,'127.0.0.1',r));
+ const server=createServer(handler(pool,async sub=>({sub,aal:'aal2'}),{payments,rateLimits:false}));await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const base='http://127.0.0.1:'+server.address().port+'/api/v3/';
  const request=async(path,method='GET',body,token=editor)=>{const h={'Content-Type':'application/json'};if(token)h.Authorization='Bearer '+token;const r=await fetch(base+path,{method,headers:h,...(body?{body:JSON.stringify(body)}:{})});return {status:r.status,body:await r.json()};};
  const callback=f=>fetch(base+'payments/mock/callback',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({...f,HashValue2:responseHash2(SECRET,f)}).toString()}).then(r=>r.text());
@@ -23,7 +23,7 @@ test('real PostgreSQL: concurrent checkouts, duplicate callbacks and product sav
   const c=(await request('collections','POST',{title:'C '+run,status:'active'})).body;
   const p=(await request('products','POST',{title:'Limited '+run,status:'active',collection_ids:[String(c.id)],sku:'LIM-'+run,price_minor:9900,inventory:3})).body;
   const v=(await request('products/'+p.id)).body.variants[0];
-  const attempts=await Promise.all(Array.from({length:10},()=>request('storefront/checkout','POST',{idempotency_key:randomUUID(),access_token:randomBytes(24).toString('base64url'),customer,lines:[{variant_id:v.id,quantity:1}]},null)));
+  const attempts=await Promise.all(Array.from({length:10},()=>request('storefront/checkout','POST',{idempotency_key:randomUUID(),access_token:randomBytes(24).toString('base64url'),customer:{...customer,email:`buyer-${randomUUID()}@example.com`},lines:[{variant_id:v.id,quantity:1}]},null)));
   assert.deepEqual(attempts.map(a=>a.status).sort(),[201,201,201,409,409,409,409,409,409,409]);
   const first=attempts.find(a=>a.status===201).body;
   const f={ServiceID:'JSMOCK',PaymentID:first.payment.fields.PaymentID,OrderNumber:first.order.number,Amount:first.payment.fields.Amount,CurrencyCode:'MYR',TxnID:'X',AuthCode:'A',TxnStatus:'0',Param6:'',Param7:''};

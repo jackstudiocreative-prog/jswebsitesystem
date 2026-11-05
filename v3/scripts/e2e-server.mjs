@@ -1,0 +1,35 @@
+// Test-only server for the Playwright suite. Refuses to run unless E2E_HARNESS=1 and binds to
+// 127.0.0.1. Serves the real build (public/) with the real vercel.json headers and rewrites, backed
+// by the real API handler on an in-memory PostgreSQL (PGlite), a fixed test identity and the mock
+// payment gateway. It is not referenced by the build or by Vercel.
+import {createServer} from 'node:http';
+import {readFile} from 'node:fs/promises';
+import {build} from 'esbuild';
+import {PGlite} from '@electric-sql/pglite';
+import {migrate} from '../src/migrate.mjs';
+import {handler} from '../src/handler.mjs';
+import {testGateway} from '../src/payments.mjs';
+if(process.env.E2E_HARNESS!=='1')throw Error('E2E harness only (set E2E_HARNESS=1)');
+const root=new URL('../',import.meta.url),port=Number(process.env.E2E_PORT??4317);
+const config=JSON.parse(await readFile(new URL('vercel.json',root),'utf8'));
+// vercel.json patterns -> RegExp (":name*" any, ":name" one segment; groups are already regex).
+const pattern=src=>new RegExp('^'+src.replace(/:[a-z]+\*/g,'.*').replace(/:[a-z]+/g,'[^/]+')+'$');
+const rewrites=config.rewrites.map(r=>[pattern(r.source),r.destination]),headers=config.headers.map(h=>[pattern(h.source),h.headers]);
+const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
+await migrate(sql);
+await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");
+for(const label of ['card-holder-brown.jpg','card-holder-black.jpg','weekender.jpg'])await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,format,label,width,height) VALUES ($1,'image/jpeg',200000,'ready','editor','jpg',$2,1600,1600)",['e2e/'+label,label]);
+await db.query('SET ROLE jackstudio_api');
+const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.repeat(10),actionUrl:`http://127.0.0.1:${port}/pay/mock`,baseUrl:'https://e2e.test'});
+const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id}});
+const adminJs=(await build({entryPoints:[new URL('e2e/admin-entry.mjs',root).pathname],bundle:true,format:'esm',write:false})).outputFiles[0].text;
+const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json'};
+createServer(async(req,res)=>{
+ const path=new URL(req.url,'http://x').pathname;
+ for(const [re,list] of headers)if(re.test(path))for(const h of list)res.setHeader(h.key,h.value);
+ let target=path;for(const [re,dest] of rewrites)if(re.test(path)){target=dest;break;}
+ if(target==='/api/index')return api(req,res);
+ if(target==='/admin.js'){res.setHeader('Content-Type','text/javascript');return res.end(adminJs);}
+ try{const file=await readFile(new URL('public'+(target.endsWith('/')?target+'index.html':target),root));res.setHeader('Content-Type',types[target.slice(target.lastIndexOf('.'))]??'application/octet-stream');res.end(file);}
+ catch{res.statusCode=404;res.end('Not found');}
+}).listen(port,'127.0.0.1',()=>console.log('e2e harness on',port));

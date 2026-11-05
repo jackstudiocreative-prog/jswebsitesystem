@@ -2,6 +2,8 @@ import {createHash,randomUUID} from 'node:crypto';
 import {HttpError} from './auth.mjs';
 import {adjustStock,syncSummary} from './inventory.mjs';
 import {amount} from './payments.mjs';
+import {queueEmail} from './email.mjs';
+import {MAX_PENDING_PER_EMAIL} from './protect.mjs';
 // Orders and payments. Everything a customer sends is re-priced on the server. Stock is reserved at
 // checkout through the ledger ('sale') and released if the order expires or is cancelled
 // ('sale_released'). Lock order everywhere: order row, then product rows by id, then variant rows.
@@ -98,7 +100,12 @@ export async function checkout(db,input,payments,custIp){
   return {order:publicOrder(existing,lines,last),payment:existing.status==='pending_payment'&&last?.status==='initiated'?payments.request(last,existing,custIp):null};
  }
  await sweepExpired(db,5);
+ // Bots fill every field; people never see this one.
+ if(input.customer?.website)bad('We could not process this checkout.');
  const lines=linesInput(input.lines),customer=customerInput(input.customer);
+ // Held stock is limited per customer, so nobody can tie up the catalogue with unpaid orders.
+ const open=Number((await db.query("SELECT count(*) AS n FROM orders WHERE lower(email)=$1 AND status='pending_payment' AND expires_at>now()",[customer.email])).rows[0].n);
+ if(open>=MAX_PENDING_PER_EMAIL)throw new HttpError(429,'You have unpaid orders waiting. Complete one of them or try again in 30 minutes.');
  const priced=await price(db,lines);
  const shipping=await quoteShipping(db,priced.groups);
  const number='JSW'+(await db.query("SELECT nextval('order_number_seq') AS n")).rows[0].n;
@@ -159,6 +166,7 @@ export async function gatewayMessage(db,source,fields,payments){
    if(short.length)await flag(`Paid after the order ${order.status}; not enough stock for ${short.join(', ')}. Restock or refund.`);
   }
   await db.query("UPDATE orders SET status='paid',paid_at=now(),cancelled_at=NULL,revision=revision+1,updated_at=now() WHERE id=$1",[order.id]);
+  await queueEmail(db,order.id,'order_paid');
   await event(payment.id,'paid');return {ok:true,number:order.number};
  }
  const next=msg.txnStatus==='2'?'pending':'failed';
@@ -192,7 +200,8 @@ export async function orderDetail(db,id){
  return {...order,id:String(o.id),lines:await q('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id'),payments:await q('SELECT id,provider,payment_ref,amount_minor,status,provider_txn_id,auth_code,created_at,updated_at FROM payments WHERE order_id=$1 ORDER BY id'),
   events:await q('SELECT e.source,e.verified,e.txn_status,e.outcome,e.received_at,p.payment_ref FROM payment_events e JOIN payments p ON p.id=e.payment_id WHERE p.order_id=$1 ORDER BY e.id'),
   refunds:await q('SELECT r.amount_minor,r.reference,r.note,r.restocked,r.created_at,r.actor,s.role AS actor_role FROM refunds r LEFT JOIN staff s ON s.subject=r.actor WHERE r.order_id=$1 ORDER BY r.id'),
-  stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id')};
+  stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id'),
+  emails:await q('SELECT kind,recipient,subject,status,created_at,sent_at FROM email_outbox WHERE order_id=$1 ORDER BY id')};
 }
 async function lockedOrder(db,id,revision){
  const o=(await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[key(id)])).rows[0];if(!o)throw new HttpError(404,'Order not found');
@@ -206,6 +215,7 @@ export async function orderAction(db,id,action,input,actor){
   if(o.status!=='paid'||o.fulfillment_status==='fulfilled')bad('Only paid, unfulfilled orders can be marked fulfilled');
   const tracking=String(input.tracking_number??'').trim();if(tracking.length>80)bad('Tracking number too long');
   await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,tracking]);
+  await queueEmail(db,o.id,'order_fulfilled');
  }else if(action==='cancel'){
   if(o.status!=='pending_payment')bad('Only unpaid orders can be cancelled. Record a refund for paid orders.');
   if((await db.query("SELECT 1 FROM payments WHERE order_id=$1 AND status IN ('pending','succeeded')",[o.id])).rows.length)throw new HttpError(409,'A payment for this order is in progress. Wait for the gateway result.');
@@ -219,6 +229,7 @@ export async function orderAction(db,id,action,input,actor){
   await db.query('INSERT INTO refunds(order_id,amount_minor,reference,note,restocked,actor) VALUES ($1,$2,$3,$4,$5,$6)',[o.id,value,reference,note,restock,actor]);
   if(restock){const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:l.quantity,reason:'returned',note:`${o.number} refund ${reference}`,actor,orderId:o.id});for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);}
   await db.query('UPDATE orders SET refunded_minor=refunded_minor+$2,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,value]);
+  await queueEmail(db,o.id,'order_refunded',{amount_minor:value});
  }else if(action==='resolve'){
   if(!o.needs_attention)bad('Nothing to resolve');
   const note=str(input.note,'Resolution note',1,300);

@@ -36,6 +36,7 @@ export function createOrders(h){
   for(const p of o.payments){const tr=el('tr');cell(tr,p.payment_ref);cell(tr,formatPrice(p.amount_minor));td(tr,badge(PAY[p.status],'pay-'+p.status));cell(tr,[p.provider_txn_id,p.auth_code].filter(Boolean).join(' · ')||'—');cell(tr,when(p.updated_at));pb.append(tr);}
   if(o.events.length){const list=el('ul',undefined,'event-list');for(const e of o.events)list.append(el('li',`${when(e.received_at)} · ${e.payment_ref} · ${e.source} · ${e.verified?'verified':'NOT verified'} · ${e.outcome}`));main.append(el('p','Gateway messages','field-label'),list);}
   if(o.stock.length){const list=el('ul',undefined,'event-list');for(const s of o.stock)list.append(el('li',`${when(s.created_at)} · ${s.sku??'—'} · ${s.delta>0?'+':''}${s.delta} (${s.reason.replace('_',' ')}) → ${s.quantity_after}`));main.append(el('p','Stock movements','field-label'),list);}
+  if(o.emails?.length){const list=el('ul',undefined,'event-list');for(const m of o.emails)list.append(el('li',`${when(m.created_at)} · ${m.subject} → ${m.recipient} · ${m.status==='pending'?'waiting (email not configured)':m.status}`));main.append(el('p','Customer emails','field-label'),list);}
   if(o.refunds.length){const list=el('ul',undefined,'event-list');for(const r of o.refunds)list.append(el('li',`${when(r.created_at)} · ${formatPrice(r.amount_minor)} · ${r.reference}${r.restocked?' · restocked':''}${r.note?' · '+r.note:''} · ${r.actor_role??'staff'}`));main.append(el('p','Refunds','field-label'),list);}
   // Status and actions.
   aside.append(el('h2','Status'));const st=el('p',undefined,'stock-line');st.append(badge(ORDER[o.status],'order-'+o.status));if(o.status==='paid')st.append(badge(FULFIL[o.fulfillment_status],'fulfil-'+o.fulfillment_status));aside.append(st);
@@ -77,6 +78,7 @@ export function createOrders(h){
   card.append(el('h2','Shipping rates'),el('p','Copied from the Shopify delivery profiles (Malaysia, all states). For each profile in the bag the cheapest matching rate applies; profiles are added together.','muted'));
   const wrap=el('div',undefined,'table-wrap'),tb=el('table'),thead=el('thead'),hr=el('tr'),body=el('tbody');for(const x of ['Profile','Rate name','Price','Condition'])hr.append(el('th',x));thead.append(hr);tb.append(thead,body);wrap.append(tb);card.append(wrap);
   for(const r of data.rates){const tr=el('tr');cell(tr,r.profile==='luggage'?'Luggage Shipping Fees':'General profile');cell(tr,r.name);cell(tr,r.price_minor?formatPrice(r.price_minor):'Free');cell(tr,r.min_subtotal_minor!=null?`Order of ${formatPrice(r.min_subtotal_minor)} or more`:r.min_weight_grams!=null?`${r.min_weight_grams/1000}–${r.max_weight_grams/1000} kg`:'Any order');body.append(tr);}
+  card.append(el('h2','Customer emails'),el('p','Order confirmation, shipping and refund emails are queued automatically with each order change. Sending is not enabled yet: choose an email provider (SMTP) to deliver queued messages.','muted'));
   card.append(el('p','Currency: MYR. Staff permissions and MFA are managed through the approved Supabase process. Editing these settings in the workspace is not implemented yet.','muted'));
   root.append(card);
  }
