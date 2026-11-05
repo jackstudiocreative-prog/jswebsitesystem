@@ -4,6 +4,7 @@
 // payment gateway. It is not referenced by the build or by Vercel.
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 import {PGlite} from '@electric-sql/pglite';
 import {migrate} from '../src/migrate.mjs';
@@ -24,7 +25,7 @@ for(const label of ['card-holder-brown.jpg','card-holder-black.jpg','weekender.j
 await db.query('SET ROLE jackstudio_api');
 const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.repeat(10),actionUrl:`http://127.0.0.1:${port}/pay/mock`,baseUrl:'https://e2e.test'});
 const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id}});
-const adminJs=(await build({entryPoints:[new URL('e2e/admin-entry.mjs',root).pathname],bundle:true,format:'esm',write:false})).outputFiles[0].text;
+const adminJs=(await build({entryPoints:[fileURLToPath(new URL('e2e/admin-entry.mjs',root))],bundle:true,format:'esm',write:false})).outputFiles[0].text;
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json'};
 createServer(async(req,res)=>{
  const path=new URL(req.url,'http://x').pathname;

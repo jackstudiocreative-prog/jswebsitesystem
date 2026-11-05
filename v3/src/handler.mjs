@@ -7,10 +7,28 @@ import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,
 import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
 import { sitemap,robots } from './seo.mjs';
+import { authorizeMaintenance,runMaintenance } from './maintenance.mjs';
 async function readBody(req){
- if(req.body!==undefined){const b=typeof req.body==='string'?req.body:Buffer.isBuffer(req.body)?req.body.toString('utf8'):req.body&&typeof req.body==='object'?new URLSearchParams(req.body).toString():'';if(Buffer.byteLength(b)>65536)throw new HttpError(413,'Request too large');return b;}
- let body='';for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>65536)throw new HttpError(413,'Request too large');}return body;
+ let body;
+ if(req.body!==undefined){
+  if(typeof req.body==='string')body=req.body;
+  else if(Buffer.isBuffer(req.body))body=req.body;
+  else if(req.headers['content-type']?.split(';')[0].trim().toLowerCase()==='application/json')body=JSON.stringify(req.body);
+  else if(req.body&&typeof req.body==='object'&&!Array.isArray(req.body)){
+   if(Object.values(req.body).some(v=>typeof v!=='string'))throw new HttpError(400,'Invalid form fields');
+   body=new URLSearchParams(req.body).toString();
+  }else throw new HttpError(400,'Invalid request body');
+ }else{
+  const chunks=[];let bytes=0;
+  for await(const chunk of req){const b=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);bytes+=b.length;if(bytes>65536)throw new HttpError(413,'Request too large');chunks.push(b);}
+  body=Buffer.concat(chunks);
+ }
+ if(body===undefined)throw new HttpError(400,'Invalid request body');
+ if(Buffer.byteLength(body)>65536)throw new HttpError(413,'Request too large');
+ return body.toString('utf8');
 }
+const isJson=req=>req.headers['content-type']?.split(';')[0].trim().toLowerCase()==='application/json';
+function formFields(params){const fields={};for(const [k,v] of params){if(Object.hasOwn(fields,k))throw new HttpError(400,'Duplicate form field');Object.defineProperty(fields,k,{value:v,enumerable:true});}return fields;}
 const clientIp=req=>{const ip=String(req.headers['x-forwarded-for']??'').split(',')[0].trim()||req.socket?.remoteAddress||'';return /^[0-9a-fA-F:.]{3,45}$/.test(ip)?ip:'0.0.0.0';};
 export function handler(pool,verify,options={}){return async(req,res)=>{
  res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
@@ -18,6 +36,11 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
  try{
   const url=new URL(req.url,'http://localhost'),path=url.pathname;
   if(path==='/health'&&req.method==='GET'){res.end('{"status":"ok"}');return;}
+  if(path==='/api/v3/maintenance/expire-orders'){
+   if(req.method!=='POST')throw new HttpError(405,'Method not available');
+   authorizeMaintenance(req.headers.authorization,options.maintenanceSecret??process.env.MAINTENANCE_SECRET);
+   db=await pool.connect();await db.query('BEGIN');const result=await runMaintenance(db);await db.query('COMMIT');res.end(JSON.stringify(result));return;
+  }
   if((path==='/sitemap.xml'||path==='/robots.txt')&&req.method==='GET'){
    const base=process.env.PUBLIC_BASE_URL??options.baseUrl??'';
    if(path==='/robots.txt'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300');res.end(robots(base,process.env.SITE_INDEXING==='on'));return;}
@@ -37,7 +60,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   if(shop){
    const kind=shop[1].startsWith('products/')?'product':shop[1].startsWith('orders/')?shop[4]:shop[1];
    if(req.method!==(['product','shipping-rates'].includes(kind)?'GET':'POST'))throw new HttpError(405,'Method not available');
-   let input;if(req.method==='POST'){if(!req.headers['content-type']?.startsWith('application/json'))throw new HttpError(415,'JSON required');try{input=JSON.parse(await readBody(req));}catch(e){if(e.status)throw e;throw new HttpError(400,'Invalid JSON');}}
+   let input;if(req.method==='POST'){if(!isJson(req))throw new HttpError(415,'JSON required');try{input=JSON.parse(await readBody(req));}catch(e){if(e.status)throw e;throw new HttpError(400,'Invalid JSON');}}
    db=await pool.connect();
    // Counted outside the transaction so rejected attempts still count.
    if(req.method==='POST'&&options.rateLimits!==false){await limit(db,kind==='checkout'?'checkout':kind==='pay'?'pay':kind==='status'?'status':'cart',clientIp(req));if(kind==='checkout'&&typeof input?.customer?.email==='string')await limit(db,'checkout-email',input.customer.email.trim());}
@@ -52,12 +75,13 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const payments=options.payments??paymentAdapter(process.env);
    if(payments.provider!==gw[1])throw new HttpError(404,'Not found');
    if(gw[2]==='complete'){
-    if(req.method!=='POST'||!req.headers['content-type']?.startsWith('application/json'))throw new HttpError(405,'Method not available');
+    if(req.method!=='POST'||!isJson(req))throw new HttpError(405,'Method not available');
     let input;try{input=JSON.parse(await readBody(req));}catch(e){if(e.status)throw e;throw new HttpError(400,'Invalid JSON');}
     db=await pool.connect();if(options.rateLimits!==false)await limit(db,'mock',clientIp(req));await db.query('BEGIN');const r=await mockComplete(db,input,payments);await db.query('COMMIT');res.end(JSON.stringify({ok:r.ok}));return;
    }
    if(!(req.method==='POST'||(req.method==='GET'&&gw[2]==='return')))throw new HttpError(405,'Method not available');
-   const fields=Object.fromEntries(req.method==='GET'?url.searchParams:new URLSearchParams(await readBody(req)));
+   if(req.method==='POST'&&req.headers['content-type']?.split(';')[0].trim().toLowerCase()!=='application/x-www-form-urlencoded')throw new HttpError(415,'Form required');
+   const fields=formFields(req.method==='GET'?url.searchParams:new URLSearchParams(await readBody(req)));
    db=await pool.connect();await db.query('BEGIN');const r=await gatewayMessage(db,gw[2],fields,payments);await db.query('COMMIT');
    if(gw[2]==='callback'){res.setHeader('Content-Type','text/plain');res.statusCode=r.ok?200:400;res.end(r.ok?'OK':'REJECTED');return;}
    res.statusCode=303;res.setHeader('Location',r.number?'/order/'+r.number:'/order/');res.end('{}');return;
@@ -89,11 +113,8 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    else result=match[1]==='session'?{subject:claims.sub,role:staff.role}:match[1]==='dashboard'?await dashboard(db):match[2]?await detail(db,match[1],match[2]):await list(db,match[1],url.searchParams);
   }
   else{
-   if(!req.headers['content-type']?.startsWith('application/json'))throw new HttpError(415,'JSON required');
-   let body='';
-   if(req.body!==undefined){body=typeof req.body==='string'?req.body:Buffer.isBuffer(req.body)?req.body.toString('utf8'):JSON.stringify(req.body);}
-   else for await(const chunk of req){body+=chunk;if(Buffer.byteLength(body)>65536)throw new HttpError(413,'Request too large');}
-   if(Buffer.byteLength(body)>65536)throw new HttpError(413,'Request too large');
+   if(!isJson(req))throw new HttpError(415,'JSON required');
+   const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
    if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
    else if(page){result=action==='draft-preview'?await previewDraft(db,input,options.cloud??cloudAdapter()):!page[2]?await createPage(db,input,claims.sub):!action?await savePage(db,page[2],input,claims.sub):action==='publish'?await publishPage(db,page[2],input,claims.sub):action==='unpublish'?await unpublishPage(db,page[2],input,claims.sub):await restoreRevision(db,page[2],page[4],input,claims.sub);res.statusCode=page[2]||action==='draft-preview'?200:201;}

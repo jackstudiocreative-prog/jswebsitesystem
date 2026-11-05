@@ -50,7 +50,7 @@ async function checkout(){
   h('label',{},'State',h('select',{name:'state',required:true},h('option',{value:''},'Choose a state'),...STATES.map(s=>h('option',{value:s},s)))),
   h('label',{},'Order note (optional)',h('textarea',{name:'note',maxlength:'500',rows:'2'})),
   h('div',{class:'js-trap','aria-hidden':'true'},h('label',{},'Website',h('input',{name:'website',tabindex:'-1',autocomplete:'off'}))),
-  h('p',{class:'js-fine'},'You will pay securely on the eGHL payment page (online banking, cards and e-wallets). Your items are held for 30 minutes.'),
+  h('p',{class:'js-fine'},'Continue to the payment page. Your items are held for 30 minutes; bank-pending payments may take longer to confirm.'),
   h('button',{class:'store-button',type:'submit'},`Pay ${price(q.total_minor)}`),h('div',{id:'checkout-msg'}));
  form.addEventListener('submit',async e=>{e.preventDefault();const button=form.querySelector('button[type=submit]'),msg=form.querySelector('#checkout-msg');button.disabled=true;msg.replaceChildren(notice('Holding your items…'));
   // One attempt id per bag, so a double click or a retry after a network error never creates two orders.

@@ -96,7 +96,7 @@ export function mountAdmin(api,role,notify){
  }
  async function editProduct(key,initialCollection){
   const ticket=++generation;upload.hidden=true;const [record,collections]=await Promise.all([key?api('products/'+key):Promise.resolve({title:'',description:'',price_minor:0,sku:'',inventory:0,status:'draft',collection_ids:initialCollection?[String(initialCollection)]:[],media:[],option_names:[],variants:[],featured_media_id:null}),all('collections')]);
-  if(ticket!==generation)return;header(key?'Edit product':'New product','MYR pricing · Stock changes are recorded with reason, staff and time. Checkout reservations are not implemented.');
+  if(ticket!==generation)return;header(key?'Edit product':'New product','MYR pricing · Stock changes and checkout reservations are recorded in inventory history.');
   const form=el('form',undefined,'editor-grid'),details=el('section',undefined,'card'),aside=el('section',undefined,'card');root.append(form);form.append(details,aside);
   const title=field('Title',record.title),handle=field('URL handle (blank generates from title)',record.handle),description=field('Description',record.description,'textarea');
   title.input.required=true;title.input.maxLength=150;description.input.rows=7;
