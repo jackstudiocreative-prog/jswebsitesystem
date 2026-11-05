@@ -37,11 +37,14 @@ test('catalog persistence, constraints and audit trail',async()=>{
 });
 test('HTTP rejects missing/invalid identity, viewer writes and invalid JSON',async()=>{
  const pool={connect:async()=>({...sql,release(){}})};
- const verify=async token=>{if(token==='invalid')throw Error();return {sub:token,aal:'aal2'};};
+ const verify=async token=>{if(token==='invalid')throw Error();return {sub:token==='pre-mfa'?'admin':token,aal:token==='pre-mfa'?'aal1':'aal2'};};
  const server=createServer(handler(pool,verify));await new Promise(r=>server.listen(0,'127.0.0.1',r));
  const base=`http://127.0.0.1:${server.address().port}`;
  try{
   assert.equal((await fetch(base+'/api/v3/products')).status,401);
+  // Accepting an Auth invitation must never bypass the staff allowlist or MFA gate.
+  for(const token of ['stranger','disabled','pre-mfa'])assert.equal((await fetch(base+'/api/v3/session',{headers:{Authorization:'Bearer '+token}})).status,403);
+  assert.deepEqual(await (await fetch(base+'/api/v3/session',{headers:{Authorization:'Bearer editor'}})).json(),{subject:'editor',role:'editor'});
   assert.equal((await fetch(base+'/api/v3/products',{headers:{Authorization:'Bearer invalid'}})).status,401);
   assert.equal((await fetch(base+'/api/v3/products',{method:'POST',headers:{Authorization:'Bearer viewer'}})).status,403);
   assert.equal((await fetch(base+'/api/v3/products',{method:'POST',headers:{Authorization:'Bearer admin','Content-Type':'application/json'},body:'{'})).status,400);
