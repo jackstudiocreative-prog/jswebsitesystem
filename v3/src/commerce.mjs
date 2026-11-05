@@ -2,11 +2,15 @@ import {createHash,randomUUID} from 'node:crypto';
 import {HttpError} from './auth.mjs';
 import {adjustStock,syncSummary} from './inventory.mjs';
 import {amount} from './payments.mjs';
+import {queueEmail} from './email.mjs';
+import {MAX_PENDING_PER_EMAIL} from './protect.mjs';
 // Orders and payments. Everything a customer sends is re-priced on the server. Stock is reserved at
 // checkout through the ledger ('sale') and released if the order expires or is cancelled
 // ('sale_released'). Lock order everywhere: order row, then product rows by id, then variant rows.
 export const STATES=['Johor','Kedah','Kelantan','Kuala Lumpur','Labuan','Melaka','Negeri Sembilan','Pahang','Penang','Perak','Perlis','Putrajaya','Sabah','Sarawak','Selangor','Terengganu'];
 export const RESERVE_MINUTES=30;
+// Bank-pending payments get at most 24 hours from creation, even after duplicate callbacks.
+export const EXPIRABLE="o.status='pending_payment' AND o.expires_at<=now() AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=o.id AND p.status='pending' AND p.created_at>now()-interval '24 hours')";
 const bad=message=>{throw new HttpError(400,message);};
 const key=v=>{const s=String(v);if(!/^[1-9]\d{0,17}$/.test(s))bad('Invalid ID');return s;};
 const hash=t=>createHash('sha256').update(t).digest('hex');
@@ -73,7 +77,10 @@ const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillme
 // Releases stock for unpaid orders past their reservation. Orders with a recent pending (e.g. FPX
 // bank-pending) payment are kept for up to 24 hours while the bank confirms.
 export async function sweepExpired(db,limit=20){
- const due=(await db.query(`SELECT id FROM orders o WHERE status='pending_payment' AND expires_at<now() AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=o.id AND p.status='pending' AND p.updated_at>now()-interval '24 hours') ORDER BY expires_at LIMIT $1 FOR UPDATE SKIP LOCKED`,[limit])).rows;
+ const due=(await db.query(`SELECT id FROM orders o WHERE ${EXPIRABLE} ORDER BY expires_at,id LIMIT $1 FOR UPDATE SKIP LOCKED`,[limit])).rows;
+ // Lock every product in global order before releasing a multi-order batch. Otherwise two
+ // overlapping workers can each hold one product and wait for the other's next product.
+ if(due.length){const products=(await db.query('SELECT DISTINCT product_id FROM order_lines WHERE order_id = ANY($1::bigint[])',[due.map(o=>o.id)])).rows;await lockProducts(db,products.map(p=>p.product_id));}
  for(const {id} of due)await release(db,id,'expired');
  return due.length;
 }
@@ -87,8 +94,9 @@ async function release(db,orderId,status,actor=null){
 }
 export async function checkout(db,input,payments,custIp){
  if(!input||typeof input!=='object')bad('Object required');
- if(typeof input.idempotency_key!=='string'||!/^[0-9a-f-]{36}$/i.test(input.idempotency_key))bad('Invalid checkout key');
+ if(typeof input.idempotency_key!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.idempotency_key))bad('Invalid checkout key');
  const access=token(input.access_token);
+ await db.query('SELECT pg_advisory_xact_lock(7348302,hashtext($1))',[input.idempotency_key.toLowerCase()]);
  const existing=(await db.query('SELECT * FROM orders WHERE idempotency_key=$1 FOR UPDATE',[input.idempotency_key])).rows[0];
  if(existing){
   // Same checkout submitted twice (double click, retry after a network error): never a second order.
@@ -97,8 +105,17 @@ export async function checkout(db,input,payments,custIp){
   const last=(await db.query('SELECT * FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1',[existing.id])).rows[0];
   return {order:publicOrder(existing,lines,last),payment:existing.status==='pending_payment'&&last?.status==='initiated'?payments.request(last,existing,custIp):null};
  }
- await sweepExpired(db,5);
+ // Bots fill every field; people never see this one.
+ if(input.customer?.website)bad('We could not process this checkout.');
  const lines=linesInput(input.lines),customer=customerInput(input.customer);
+ await db.query('SELECT pg_advisory_xact_lock(7348303,hashtext($1))',[customer.email]);
+ // Held stock is limited per customer, so nobody can tie up the catalogue with unpaid orders.
+ const open=Number((await db.query("SELECT count(*) AS n FROM orders WHERE lower(email)=$1 AND status='pending_payment'",[customer.email])).rows[0].n);
+ if(open>=MAX_PENDING_PER_EMAIL)throw new HttpError(429,'You have unpaid orders waiting. Complete one of them or try again in 30 minutes.');
+ // Resolve owners, lock products, then re-read sellability, prices and shipping configuration.
+ // A staff save that wins the lock must be reflected in the order being created.
+ const owners=(await db.query('SELECT product_id FROM product_variants WHERE id = ANY($1::bigint[])',[lines.map(l=>l.variant_id)])).rows;
+ await lockProducts(db,owners.map(v=>v.product_id));
  const priced=await price(db,lines);
  const shipping=await quoteShipping(db,priced.groups);
  const number='JSW'+(await db.query("SELECT nextval('order_number_seq') AS n")).rows[0].n;
@@ -122,7 +139,6 @@ async function orderByToken(db,number,access,lock=false){
  return o;
 }
 export async function orderStatus(db,number,input){
- await sweepExpired(db,5);
  const o=await orderByToken(db,number,input?.access_token);
  const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id',[o.id])).rows,last=(await db.query('SELECT * FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1',[o.id])).rows[0];
  return {order:publicOrder(o,lines,last)};
@@ -136,7 +152,9 @@ export async function retryPayment(db,number,input,payments,custIp){
  return {payment:payments.request(payment,o,custIp)};
 }
 // Applies one gateway message. Safe to receive any number of times, in any order.
-const keep=f=>Object.fromEntries(Object.entries(f).filter(([k])=>!/^(CardNo|CardHolder|CardExp|CVV|Token|HashValue2?)$/i.test(k)).map(([k,v])=>[k,String(v).slice(0,300)]).slice(0,40));
+// Explicit protocol evidence only. Unknown gateway fields can contain PANs, tokens or customer PII.
+const EVENT_FIELDS=new Set(['TransactionType','PymtMethod','ServiceID','PaymentID','OrderNumber','Amount','CurrencyCode','TxnID','TxnStatus']);
+const keep=f=>Object.fromEntries(Object.entries(f).filter(([k])=>EVENT_FIELDS.has(k)).map(([k,v])=>[k,String(v).slice(0,300)]));
 export async function gatewayMessage(db,source,fields,payments){
  const msg=payments.verify(fields);
  const event=async(paymentId,outcome)=>db.query('INSERT INTO payment_events(payment_id,source,verified,txn_status,outcome,payload) VALUES ($1,$2,$3,$4,$5,$6)',[paymentId,source,!!msg,msg?.txnStatus??null,outcome,JSON.stringify(keep(fields??{}))]);
@@ -146,6 +164,7 @@ export async function gatewayMessage(db,source,fields,payments){
  const order=(await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[found.order_id])).rows[0];
  const payment=(await db.query('SELECT * FROM payments WHERE id=$1 FOR UPDATE',[found.id])).rows[0];
  const flag=note=>db.query("UPDATE orders SET needs_attention=true,attention_note=trim(attention_note||' '||$2),updated_at=now() WHERE id=$1",[order.id,note]);
+ if(msg.orderNumber&&msg.orderNumber!==order.number){await event(payment.id,'rejected_order');return {ok:false};}
  if(msg.amount!==amount(payment.amount_minor)||msg.currency!=='MYR'){await event(payment.id,'rejected_amount');await flag(`Gateway reported ${msg.currency} ${msg.amount} for ${payment.payment_ref}; expected MYR ${amount(payment.amount_minor)}.`);return {ok:false,number:order.number};}
  if(payment.status==='succeeded'){await event(payment.id,'duplicate');return {ok:true,number:order.number};}
  if(msg.txnStatus==='0'){
@@ -154,11 +173,14 @@ export async function gatewayMessage(db,source,fields,payments){
   if(order.status!=='pending_payment'){
    // Paid after the reservation was released: take the stock again if it is still there.
    const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[order.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
-   const short=[];for(const l of lines){try{await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:`${order.number} paid late`,orderId:order.id});}catch(e){if(e.status!==409)throw e;short.push(l.title);}}
+   const inventory=(await db.query('SELECT id,inventory FROM product_variants WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE',[lines.map(l=>l.variant_id)])).rows;
+   const short=lines.filter(l=>inventory.find(v=>String(v.id)===String(l.variant_id)).inventory<l.quantity).map(l=>l.title);
+   if(!short.length)for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:`${order.number} paid late`,orderId:order.id});
    for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
    if(short.length)await flag(`Paid after the order ${order.status}; not enough stock for ${short.join(', ')}. Restock or refund.`);
   }
   await db.query("UPDATE orders SET status='paid',paid_at=now(),cancelled_at=NULL,revision=revision+1,updated_at=now() WHERE id=$1",[order.id]);
+  await queueEmail(db,order.id,'order_paid');
   await event(payment.id,'paid');return {ok:true,number:order.number};
  }
  const next=msg.txnStatus==='2'?'pending':'failed';
@@ -175,7 +197,6 @@ export async function mockComplete(db,input,payments){
 
 // Staff (admin/editor write, viewer read).
 export async function listOrders(db,params){
- await sweepExpired(db,20);
  const args=[],where=[];const add=(sql,v)=>{args.push(v);where.push(sql.replaceAll('?','$'+args.length));};
  const q=(params.get('q')??'').trim();if(q.length>150)bad('Search too long');if(q)add('(number ILIKE ? OR email ILIKE ? OR customer_name ILIKE ? OR phone ILIKE ?)','%'+q+'%');
  const st=params.get('status');if(st){if(!['pending_payment','paid','cancelled','expired','unfulfilled','attention'].includes(st))bad('Invalid filter');if(st==='unfulfilled')where.push("status='paid' AND fulfillment_status='unfulfilled'");else if(st==='attention')where.push('needs_attention');else add('status=?',st);}
@@ -192,7 +213,8 @@ export async function orderDetail(db,id){
  return {...order,id:String(o.id),lines:await q('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id'),payments:await q('SELECT id,provider,payment_ref,amount_minor,status,provider_txn_id,auth_code,created_at,updated_at FROM payments WHERE order_id=$1 ORDER BY id'),
   events:await q('SELECT e.source,e.verified,e.txn_status,e.outcome,e.received_at,p.payment_ref FROM payment_events e JOIN payments p ON p.id=e.payment_id WHERE p.order_id=$1 ORDER BY e.id'),
   refunds:await q('SELECT r.amount_minor,r.reference,r.note,r.restocked,r.created_at,r.actor,s.role AS actor_role FROM refunds r LEFT JOIN staff s ON s.subject=r.actor WHERE r.order_id=$1 ORDER BY r.id'),
-  stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id')};
+  stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id'),
+  emails:await q('SELECT kind,recipient,subject,status,created_at,sent_at FROM email_outbox WHERE order_id=$1 ORDER BY id')};
 }
 async function lockedOrder(db,id,revision){
  const o=(await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[key(id)])).rows[0];if(!o)throw new HttpError(404,'Order not found');
@@ -203,9 +225,11 @@ export async function orderAction(db,id,action,input,actor){
  if(!input||typeof input!=='object')bad('Object required');
  const o=await lockedOrder(db,id,input.revision);
  if(action==='fulfil'){
+  if(o.needs_attention)throw new HttpError(409,'Resolve the payment or stock issue before fulfilment.');
   if(o.status!=='paid'||o.fulfillment_status==='fulfilled')bad('Only paid, unfulfilled orders can be marked fulfilled');
   const tracking=String(input.tracking_number??'').trim();if(tracking.length>80)bad('Tracking number too long');
   await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,tracking]);
+  await queueEmail(db,o.id,'order_fulfilled');
  }else if(action==='cancel'){
   if(o.status!=='pending_payment')bad('Only unpaid orders can be cancelled. Record a refund for paid orders.');
   if((await db.query("SELECT 1 FROM payments WHERE order_id=$1 AND status IN ('pending','succeeded')",[o.id])).rows.length)throw new HttpError(409,'A payment for this order is in progress. Wait for the gateway result.');
@@ -217,8 +241,18 @@ export async function orderAction(db,id,action,input,actor){
   const reference=str(input.reference,'eGHL refund reference',1,80),note=String(input.note??'').trim().slice(0,500),restock=input.restock===true;
   if(restock&&(await db.query('SELECT 1 FROM refunds WHERE order_id=$1 AND restocked',[o.id])).rows.length)bad('Items for this order were already restocked');
   await db.query('INSERT INTO refunds(order_id,amount_minor,reference,note,restocked,actor) VALUES ($1,$2,$3,$4,$5,$6)',[o.id,value,reference,note,restock,actor]);
-  if(restock){const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:l.quantity,reason:'returned',note:`${o.number} refund ${reference}`,actor,orderId:o.id});for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);}
+  if(restock){
+   const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
+   for(const l of lines){
+    // A late paid order with insufficient stock has no reservation to return. Older versions
+    // could also reserve only some lines. Return only the net units actually taken for this order.
+    const net=Number((await db.query("SELECT coalesce(sum(delta),0) AS n FROM inventory_adjustments WHERE order_id=$1 AND variant_id=$2 AND reason IN ('sale','sale_released','returned')",[o.id,l.variant_id])).rows[0].n);
+    if(net<0)await adjustStock(db,{variantId:l.variant_id,delta:-net,reason:'returned',note:`${o.number} refund ${reference}`,actor,orderId:o.id});
+   }
+   for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
+  }
   await db.query('UPDATE orders SET refunded_minor=refunded_minor+$2,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,value]);
+  await queueEmail(db,o.id,'order_refunded',{amount_minor:value});
  }else if(action==='resolve'){
   if(!o.needs_attention)bad('Nothing to resolve');
   const note=str(input.note,'Resolution note',1,300);

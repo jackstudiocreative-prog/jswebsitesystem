@@ -34,3 +34,27 @@ jobs:
           TEST_DATABASE_URL: postgres://test:disposable-ci-only@localhost:5432/jackstudio_test
       - run: npm run build
         working-directory: v3
+  browser-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.13.1'
+          cache: npm
+          cache-dependency-path: v3/package-lock.json
+      - run: npm ci
+        working-directory: v3
+      - run: npx playwright install --with-deps chromium
+        working-directory: v3
+      # Test-only harness (in-memory PostgreSQL, fixed test identity, mock gateway); no secrets used.
+      - run: npm run e2e
+        working-directory: v3
+        env:
+          CI: 'true'
+      - if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-traces
+          path: v3/test-results/
+          retention-days: 7

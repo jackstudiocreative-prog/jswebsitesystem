@@ -11,6 +11,8 @@ async function api(path,body){const r=await fetch('/api/v3/storefront/'+path,bod
 const bag=()=>read(localStorage,BAG,[]);
 function setBag(items){write(localStorage,BAG,items.filter(i=>i.quantity>0));count();}
 function count(){const n=bag().reduce((s,i)=>s+i.quantity,0);const el=document.getElementById('bag-count');if(el)el.textContent=String(n);}
+function meta(name,content,attr='name'){let m=document.head.querySelector(`meta[${attr}="${name}"]`);if(!m){m=document.createElement('meta');m.setAttribute(attr,name);document.head.append(m);}m.setAttribute('content',content);}
+function canonical(path){let l=document.head.querySelector('link[rel=canonical]');if(!l){l=document.createElement('link');l.rel='canonical';document.head.append(l);}l.href=location.origin+path;}
 function page(title,...kids){document.title=`${title} | Jack Studio`;root.replaceChildren(h('section',{class:'store-section'},h('div',{class:'store-section-inner js-shop'},...kids)));}
 const notice=(text,kind='')=>h('p',{class:'js-notice '+kind,role:kind==='error'?'alert':'status'},text);
 const random=()=>{const b=new Uint8Array(32);crypto.getRandomValues(b);return btoa(String.fromCharCode(...b)).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');};
@@ -23,6 +25,7 @@ async function product(handle){
  const update=()=>{const v=current();priceEl.textContent=v?price(v.price_minor):'Unavailable';stock.textContent=!v?'This combination is not available.':!v.available?'Sold out':v.low?'Only a few left':'In stock';add.disabled=!v||!v.available;};
  const pickers=names.map((name,i)=>{const values=[...new Set(p.variants.map(v=>v.option_values[i]))];const s=h('select',{id:'opt'+i,onchange:e=>{chosen[i]=e.target.value;update();}},...values.map(v=>h('option',{value:v,selected:v===chosen[i]},v)));return h('label',{},name,s);});
  add.addEventListener('click',()=>{const v=current(),n=Number(qty.value);if(!v||!Number.isInteger(n)||n<1||n>20){msg.replaceChildren(notice('Choose a quantity from 1 to 20.','error'));return;}const items=bag(),line=items.find(i=>i.variant_id===v.id);if(line)line.quantity=Math.min(20,line.quantity+n);else items.push({variant_id:v.id,quantity:n});setBag(items);msg.replaceChildren(notice('Added to your bag. ',''),h('a',{href:'/cart'},'View bag'));});
+ const summary=String(p.description||'').replace(/\s+/g,' ').trim().slice(0,155);meta('description',summary);meta('og:title',p.title,'property');meta('og:description',summary,'property');meta('og:type','product','property');canonical('/products/'+p.handle);
  page(p.title,h('div',{class:'js-product'},h('div',{class:'js-card-image js-image-placeholder',role:'img','aria-label':p.title}),h('div',{class:'js-product-copy'},h('p',{class:'js-eyebrow'},'JACK STUDIO'),h('h1',{},p.title),priceEl,stock,...pickers,h('label',{},'Quantity',qty),add,msg,h('div',{class:'js-description'},...String(p.description||'').split(/\n{2,}/).filter(Boolean).map(t=>h('p',{},t))))));
  update();
 }
@@ -46,7 +49,8 @@ async function checkout(){
   h('div',{class:'js-row'},field('Postcode','postcode',{inputmode:'numeric',pattern:'[0-9]{5}',maxlength:'5',autocomplete:'postal-code'}),field('City','city',{autocomplete:'address-level2',maxlength:'100'})),
   h('label',{},'State',h('select',{name:'state',required:true},h('option',{value:''},'Choose a state'),...STATES.map(s=>h('option',{value:s},s)))),
   h('label',{},'Order note (optional)',h('textarea',{name:'note',maxlength:'500',rows:'2'})),
-  h('p',{class:'js-fine'},'You will pay securely on the eGHL payment page (online banking, cards and e-wallets). Your items are held for 30 minutes.'),
+  h('div',{class:'js-trap','aria-hidden':'true'},h('label',{},'Website',h('input',{name:'website',tabindex:'-1',autocomplete:'off'}))),
+  h('p',{class:'js-fine'},'Continue to the payment page. Your items are held for 30 minutes; bank-pending payments may take longer to confirm.'),
   h('button',{class:'store-button',type:'submit'},`Pay ${price(q.total_minor)}`),h('div',{id:'checkout-msg'}));
  form.addEventListener('submit',async e=>{e.preventDefault();const button=form.querySelector('button[type=submit]'),msg=form.querySelector('#checkout-msg');button.disabled=true;msg.replaceChildren(notice('Holding your items…'));
   // One attempt id per bag, so a double click or a retry after a network error never creates two orders.

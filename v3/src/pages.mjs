@@ -50,36 +50,40 @@ export async function pageDetail(db,id){
  const redirects=(await db.query('SELECT from_slug,created_at FROM page_redirects WHERE page_id=$1 ORDER BY created_at DESC',[page.id])).rows;
  return {...shape(page),revisions,redirects};
 }
-// A slug belongs to exactly one page or one redirect. Claiming a slug removes a redirect using it.
-async function claimSlug(db,slug){await db.query('DELETE FROM page_redirects WHERE from_slug=$1',[slug]);}
+// Draft routing changes must not affect the live site. Serialize cross-table URL ownership checks
+// before locking a page, since drafts and published revisions keep different slugs.
+const routeLock=db=>db.query('SELECT pg_advisory_xact_lock(7348304)');
+async function checkSlug(db,slug,id=null){
+ if((await db.query('SELECT p.id FROM pages p JOIN page_revisions r ON r.id=p.published_revision_id WHERE r.slug=$1 AND ($2::bigint IS NULL OR p.id<>$2)',[slug,id])).rows.length)throw new HttpError(409,'This URL belongs to a published page.');
+}
 export async function createPage(db,input,actor){
  object(input);const row=fields(input,{}),list=sections(input.sections??[]);await checkReferences(db,list);
- await claimSlug(db,row.slug);
+ await routeLock(db);await checkSlug(db,row.slug);
  const page=(await db.query('INSERT INTO pages(slug,title,seo_title,seo_description,sections,updated_by) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',[row.slug,row.title,row.seo_title,row.seo_description,JSON.stringify(list),actor])).rows[0];
  await audit(db,actor,'create',page.id);return shape(page);
 }
 export async function savePage(db,id,input,actor){
- object(input,['revision']);const page=await locked(db,id,input.revision);
+ object(input,['revision']);await routeLock(db);const page=await locked(db,id,input.revision);
  const row=fields(Object.fromEntries(Object.entries(input).filter(([k])=>k!=='revision'&&k!=='sections')),page),list=input.sections!==undefined?sections(input.sections):page.sections;
  await checkReferences(db,list);
- if(row.slug!==page.slug){
-  await claimSlug(db,row.slug);
-  // Visitors may have the old URL of a published page: keep it working.
-  if(page.published_revision_id!=null)await db.query('INSERT INTO page_redirects(from_slug,page_id) VALUES ($1,$2)',[page.slug,page.id]);
- }
+ if(row.slug!==page.slug)await checkSlug(db,row.slug,page.id);
  const saved=(await db.query('UPDATE pages SET title=$1,slug=$2,seo_title=$3,seo_description=$4,sections=$5,has_unpublished_changes=true,revision=revision+1,updated_at=now(),updated_by=$6 WHERE id=$7 RETURNING *',[row.title,row.slug,row.seo_title,row.seo_description,JSON.stringify(list),actor,page.id])).rows[0];
  await audit(db,actor,'update',page.id);return shape(saved);
 }
 export async function publishPage(db,id,input,actor){
- object(input,['revision']);const page=await locked(db,id,input?.revision);
+ object(input,['revision']);await routeLock(db);const page=await locked(db,id,input?.revision);
  const list=sections(page.sections);await checkReferences(db,list);fields({},page);
+ await checkSlug(db,page.slug,page.id);
+ const oldLive=page.published_revision_id==null?null:(await db.query('SELECT slug FROM page_revisions WHERE id=$1',[page.published_revision_id])).rows[0];
+ await db.query('DELETE FROM page_redirects WHERE from_slug=$1',[page.slug]);
+ if(oldLive&&oldLive.slug!==page.slug){await db.query('DELETE FROM page_redirects WHERE from_slug=$1',[oldLive.slug]);await db.query('INSERT INTO page_redirects(from_slug,page_id) VALUES ($1,$2)',[oldLive.slug,page.id]);}
  const number=(await db.query('SELECT coalesce(max(number),0)+1 AS n FROM page_revisions WHERE page_id=$1',[page.id])).rows[0].n;
  const rev=(await db.query('INSERT INTO page_revisions(page_id,number,slug,title,seo_title,seo_description,sections,published_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id',[page.id,number,page.slug,page.title,page.seo_title,page.seo_description,JSON.stringify(list),actor])).rows[0];
  const saved=(await db.query('UPDATE pages SET published_revision_id=$1,has_unpublished_changes=false,revision=revision+1,updated_at=now(),updated_by=$2 WHERE id=$3 RETURNING *',[rev.id,actor,page.id])).rows[0];
  await audit(db,actor,'publish',page.id);return shape(saved);
 }
 export async function unpublishPage(db,id,input,actor){
- object(input,['revision']);const page=await locked(db,id,input.revision);if(page.published_revision_id==null)bad('Page is not published');
+ object(input,['revision']);await routeLock(db);const page=await locked(db,id,input.revision);if(page.published_revision_id==null)bad('Page is not published');
  const saved=(await db.query('UPDATE pages SET published_revision_id=NULL,revision=revision+1,updated_at=now(),updated_by=$1 WHERE id=$2 RETURNING *',[actor,page.id])).rows[0];
  await audit(db,actor,'unpublish',page.id);return shape(saved);
 }
@@ -131,9 +135,9 @@ export async function previewDraft(db,input,cloud){
 // delivery is not enabled yet (originals stay private).
 export async function publicPage(db,slug){
  if(!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)||slug.length>80)throw new HttpError(404,'Page not found');
- const page=(await db.query('SELECT p.slug,r.title,r.seo_title,r.seo_description,r.sections,r.published_at FROM pages p JOIN page_revisions r ON r.id=p.published_revision_id WHERE p.slug=$1',[slug])).rows[0];
+ const page=(await db.query('SELECT r.slug,r.title,r.seo_title,r.seo_description,r.sections,r.published_at FROM pages p JOIN page_revisions r ON r.id=p.published_revision_id WHERE r.slug=$1',[slug])).rows[0];
  if(page){const {sections:list,...rest}=page;return {page:{...rest,sections:await resolve(db,list)},checkoutAvailable:false};}
- const redirect=(await db.query('SELECT p.slug FROM page_redirects r JOIN pages p ON p.id=r.page_id WHERE r.from_slug=$1 AND p.published_revision_id IS NOT NULL',[slug])).rows[0];
+ const redirect=(await db.query('SELECT live.slug FROM page_redirects r JOIN pages p ON p.id=r.page_id JOIN page_revisions live ON live.id=p.published_revision_id WHERE r.from_slug=$1',[slug])).rows[0];
  if(redirect)return {redirect_to:redirect.slug};
  throw new HttpError(404,'Page not found');
 }

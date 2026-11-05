@@ -10,6 +10,8 @@
  "rewrites":[
   {"source":"/api/v3/:path*","destination":"/api/index"},
   {"source":"/health","destination":"/api/index"},
+  {"source":"/sitemap.xml","destination":"/api/index"},
+  {"source":"/robots.txt","destination":"/api/index"},
   {"source":"/admin","destination":"/admin/index.html"},
   {"source":"/pages/:slug","destination":"/page.html"},
   {"source":"/products/:handle","destination":"/shop.html"},
@@ -22,6 +24,9 @@
   {"key":"X-Robots-Tag","value":"noindex, nofollow"},
   {"key":"X-Content-Type-Options","value":"nosniff"},
   {"key":"Referrer-Policy","value":"strict-origin-when-cross-origin"},
-  {"key":"X-Frame-Options","value":"DENY"}
- ]}]
+  {"key":"X-Frame-Options","value":"DENY"},
+  {"key":"Permissions-Policy","value":"camera=(), microphone=(), geolocation=(), payment=()"}
+ ]},
+ {"source":"/admin(.*)","headers":[{"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.cloudinary.com; connect-src 'self' https://*.supabase.co https://api.cloudinary.com; form-action 'self'; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"}]},
+ {"source":"/((?!admin|api/).*)","headers":[{"key":"Content-Security-Policy","value":"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: https://api.cloudinary.com https://res.cloudinary.com; connect-src 'self'; form-action 'self' https:; base-uri 'none'; object-src 'none'; frame-ancestors 'none'"}]}]
 }
