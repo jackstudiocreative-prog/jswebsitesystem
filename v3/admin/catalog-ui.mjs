@@ -1,7 +1,8 @@
 // DOM text APIs deliberately avoid interpolating catalogue content as HTML.
 import {createWebsite} from './website-ui.mjs';
-export function moneyToMinor(value){if(!/^\d{1,8}(\.\d{1,2})?$/.test(value))throw Error('Enter a non-negative MYR price with up to two decimals.');const [whole,fraction='']=value.split('.');const n=Number(whole)*100+Number(fraction.padEnd(2,'0'));if(n>2147483647)throw Error('Price is too large.');return n;}
-export const formatPrice=n=>new Intl.NumberFormat('en-MY',{style:'currency',currency:'MYR'}).format(n/100);
+import {moneyToMinor,formatPrice} from './money.mjs';
+import {createOrders} from './orders-ui.mjs';
+export {moneyToMinor,formatPrice};
 export function mountAdmin(api,role,notify){
  const root=document.getElementById('admin-content'),upload=document.getElementById('media-upload');
  let view='Dashboard',offset=0,search='',status='',collection='',inventoryFilter='',generation=0,dirty=false;
@@ -103,6 +104,9 @@ export function mountAdmin(api,role,notify){
   const state=select(['draft','active','archived'].map(x=>[x,x]),record.status),stateLabel=el('label','Status');stateLabel.append(state);aside.append(stateLabel,el('h2','Collections'));
   const choices=[];for(const c of collections){const f=field(c.title,'','checkbox');f.input.checked=record.collection_ids.includes(String(c.id));choices.push([c.id,f.input]);aside.append(f.wrap);}
   if(!collections.length)aside.append(el('p','Create a collection first. Products can belong to several collections.','muted'));
+  const shipProfile=select([['general','General (RM5, free from RM49)'],['luggage','Luggage (RM26.90, 1–50 kg)']],record.shipping_profile??'general'),shipLabel=el('label','Shipping profile');shipLabel.append(shipProfile);
+  const weight=field('Weight (kg, per item)',((record.weight_grams??0)/1000).toString(),'number');weight.input.min=0;weight.input.step=0.01;weight.input.max=100;
+  aside.append(el('h2','Shipping'),shipLabel,weight.wrap,el('p','Luggage shipping needs a weight between 1 and 50 kg per order.','muted'));
   // Pricing & variants. Without options a product keeps one default variant (simple price/SKU/stock form).
   const variants=record.variants??[],simpleVariant=variants[0];
   let options=[...(record.option_names??[])];
@@ -167,7 +171,8 @@ export function mountAdmin(api,role,notify){
   form.addEventListener('input',()=>{dirty=true;});
   if(readOnly)for(const n of form.querySelectorAll('input,textarea,select'))n.disabled=true;
   form.addEventListener('submit',async e=>{e.preventDefault();if(readOnly)return;save.disabled=true;try{
-   const body={title:title.input.value,description:description.input.value,status:state.value,collection_ids:choices.filter(([,n])=>n.checked).map(([id])=>String(id)),media:selected.map(({media_id,alt})=>({media_id,alt})),featured_media_id:featured};
+   const kg=Number(weight.input.value||0);if(!Number.isFinite(kg)||kg<0||kg>100)throw Error('Weight must be 0–100 kg.');
+   const body={shipping_profile:shipProfile.value,weight_grams:Math.round(kg*1000),title:title.input.value,description:description.input.value,status:state.value,collection_ids:choices.filter(([,n])=>n.checked).map(([id])=>String(id)),media:selected.map(({media_id,alt})=>({media_id,alt})),featured_media_id:featured};
    if(!options.length&&rows.length<=1&&!(record.option_names??[]).length){body.price_minor=moneyToMinor(simple.price.input.value);body.sku=simple.sku.input.value;if(!key)body.inventory=Number(simple.inventory.input.value);}
    else{if(!options.length)syncSimpleToRow();body.option_names=options.map(n=>n.trim());body.variants=rows.map((r,i)=>{const label=variantName(options,r.option_values)||`variant ${i+1}`;let price;try{price=moneyToMinor(String(r.price).trim());}catch(err){throw Error(`${label}: ${err.message}`);}const v={option_values:r.option_values.map(x=>x.trim()),sku:r.sku,price_minor:price,active:r.active,media_id:r.media_id};if(r.id)v.id=r.id;else v.inventory=Number(r.inventory)||0;return v;});}
    if(handle.input.value)body.handle=handle.input.value;if(key)body.revision=record.revision;
@@ -197,10 +202,13 @@ export function mountAdmin(api,role,notify){
   }
  }
  const website=createWebsite({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,all,thumb,previews,mediaPicker,navigate,setDirty:v=>{dirty=v;},ticket:()=>++generation,current:t=>t===generation});
+ const sales=createOrders({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,navigate:v=>navigate(v,true),ticket:()=>++generation,current:t=>t===generation});
  async function render(){
   const ticket=++generation;upload.hidden=view!=='Media Library';header(view,readOnly?'Viewer access · Read only':'Staging workspace · Changes persist in the shared database');
-  if(['Customers','Orders','Settings'].includes(view)){empty(view==='Settings'?'Application settings editor is not implemented. Currency: MYR. Staff permissions and MFA are managed through the approved Supabase process.':`${view} is not implemented. No customer records, orders or revenue are simulated.`);return;}
-  if(view==='Dashboard'){const d=await api('dashboard');if(ticket!==generation)return;const grid=el('div',undefined,'metrics');for(const [label,key]of [['All products','products'],['Active products','active'],['Draft products','drafts'],['Collections','collections'],['Ready images','media'],['Active variants','variants'],['Low stock','low_stock'],['Out of stock','out_of_stock'],['Published pages','published_pages'],['Pages with drafts','draft_pages']]){const card=el('div',undefined,'card'+((key==='low_stock'||key==='out_of_stock')&&d[key]?' metric-alert':''));card.append(el('span',label,'muted'),el('strong',String(d[key]??0)));grid.append(card);}root.append(grid);const welcome=el('section',undefined,'card welcome');welcome.append(el('p','BUILD YOUR COLLECTION','eyebrow'),el('h2','Made for the everyday. Managed with care.'),el('p','Manage your catalogue, organize collections and prepare your imagery. Checkout and financial reporting are not connected.'),button('Manage products',()=>navigate('Products')),button('Review inventory',()=>navigate('Inventory')),button('Edit website',()=>navigate('Website')),button('Open media library',()=>navigate('Media Library')));root.append(welcome);return;}
+  if(view==='Orders'){await sales.orders(ticket);return;}
+  if(view==='Customers'){await sales.customers(ticket);return;}
+  if(view==='Settings'){await sales.settings(ticket);return;}
+  if(view==='Dashboard'){const d=await api('dashboard');if(ticket!==generation)return;const grid=el('div',undefined,'metrics');for(const [label,key]of [['All products','products'],['Active products','active'],['Draft products','drafts'],['Collections','collections'],['Ready images','media'],['Active variants','variants'],['Low stock','low_stock'],['Out of stock','out_of_stock'],['Paid orders','paid_orders'],['Revenue (paid, net of refunds)','revenue_minor'],['Awaiting payment','pending_orders'],['To fulfil','to_fulfil'],['Needs attention','attention_orders'],['Published pages','published_pages'],['Pages with drafts','draft_pages']]){const card=el('div',undefined,'card'+((key==='low_stock'||key==='out_of_stock'||key==='attention_orders')&&d[key]?' metric-alert':''));card.append(el('span',label,'muted'),el('strong',key==='revenue_minor'?formatPrice(Number(d[key]??0)):String(d[key]??0)));grid.append(card);}root.append(grid);const welcome=el('section',undefined,'card welcome');welcome.append(el('p','BUILD YOUR COLLECTION','eyebrow'),el('h2','Made for the everyday. Managed with care.'),el('p','Manage your catalogue, organize collections and prepare your imagery. Orders are paid through eGHL; revenue counts paid orders net of refunds.'),button('Manage products',()=>navigate('Products')),button('Review orders',()=>navigate('Orders')),button('Review inventory',()=>navigate('Inventory')),button('Edit website',()=>navigate('Website')),button('Open media library',()=>navigate('Media Library')));root.append(welcome);return;}
   if(view==='Inventory'){await inventoryView(ticket);return;}
   if(view==='Website'){await website.list(ticket);return;}
   const resource=view==='Products'?'products':view==='Collections'?'collections':'media';
@@ -215,7 +223,7 @@ export function mountAdmin(api,role,notify){
   else {const body=table(resource==='products'?['Product','Status','SKU','Price','Inventory','Action']:['Collection','Status','Order','Action']);for(const row of data.items){const tr=el('tr');cell(tr,row.title);badge(tr,row.status);if(resource==='products'){const many=row.variant_count>1;cell(tr,(row.sku||'—')+(many?` · ${row.variant_count} variants`:''));cell(tr,(many?'From ':'')+formatPrice(row.price_minor));cell(tr,String(row.inventory));}else cell(tr,String(row.position));const td=el('td');td.append(button(readOnly?'View':'Edit',()=>resource==='products'?editProduct(row.id):editCollection(row.id)));tr.append(td);body.append(tr);}}
   const pages=el('div',undefined,'pagination');pages.append(button('Previous',()=>{offset=Math.max(0,offset-25);return render();},offset===0),button('Next',()=>{offset+=25;return render();},offset+data.items.length>=data.total));root.append(pages);
  }
- async function navigate(next){if(dirty&&!window.confirm('Discard unsaved edits?'))return;dirty=false;view=next;offset=0;search='';status='';collection='';inventoryFilter='';for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');}await render();}
+ async function navigate(next,keep=false){if(!keep&&next==='Orders')sales?.resetOrders();if(dirty&&!window.confirm('Discard unsaved edits?'))return;dirty=false;view=next;offset=0;search='';status='';collection='';inventoryFilter='';for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');}await render();}
  const navigation=[...document.querySelectorAll('[data-view]')].map(b=>{const fn=()=>navigate(b.dataset.view).catch(e=>notify(e.message));b.addEventListener('click',fn);return [b,fn];});
  const unload=e=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
  return {reload:()=>navigate(view),destroy(){for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};

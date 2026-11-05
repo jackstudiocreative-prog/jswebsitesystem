@@ -11,9 +11,11 @@ await copyFile(new URL('../../jackstudio-admin-mvp/public/styles.css',import.met
 await copyFile(new URL('admin/catalog.css',root),new URL('public/catalog.css',root));
 await copyFile(new URL('admin/page-sections.css',root),new URL('public/page-sections.css',root));
 await copyFile(new URL('web/page.html',root),new URL('public/page.html',root));
+await copyFile(new URL('web/shop.html',root),new URL('public/shop.html',root));
 const url=process.env.SUPABASE_URL??'',key=process.env.SUPABASE_PUBLISHABLE_KEY??'';
 if(url&&new URL(url).protocol!=='https:')throw Error('HTTPS Supabase URL required');
 if(key&&!key.startsWith('sb_publishable_'))throw Error('Only a Supabase publishable key may enter the browser build');
 await writeFile(new URL('public/auth-config.json',root),JSON.stringify({url,key}));
 await build({entryPoints:[new URL('admin/app.mjs',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')],bundle:true,format:'esm',platform:'browser',outfile:new URL('public/admin.js',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
 await build({entryPoints:[new URL('web/page.mjs',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')],bundle:true,format:'esm',platform:'browser',outfile:new URL('public/page.js',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
+await build({entryPoints:[new URL('web/shop.mjs',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')],bundle:true,format:'esm',platform:'browser',outfile:new URL('public/shop.js',root).pathname.replace(/^\/([A-Za-z]:)/,'$1')});
