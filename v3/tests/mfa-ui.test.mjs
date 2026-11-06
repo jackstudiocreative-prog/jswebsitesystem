@@ -13,7 +13,7 @@ test('page events render the exact SDK QR, block workspace on failure and handle
   mfa:{listFactors:async()=>ok({totp:[]}),getAuthenticatorAssuranceLevel:async()=>ok({currentLevel:failVerify?'aal1':'aal2'}),
    enroll:async()=>ok({type:'totp',id:'factor',totp:{qr_code:qr}}),challenge:async()=>ok({id:'challenge'}),verify:async()=>failVerify?{error:new Error('Invalid code')}:ok({})}
  };
- const context=vm.createContext({mountAdmin:()=>({reload:async()=>{},destroy(){}}),...helpers,...callbackHelpers,history:{replaceState(){}},URLSearchParams,createClient:()=>({auth}),document:{getElementById:get,createElement:()=>({})},sessionStorage:{},location:{origin:'https://staging.example'},
+ const context=vm.createContext({mountAdmin:()=>({reload:async()=>{},destroy(){}}),...helpers,...callbackHelpers,history:{replaceState(){}},URLSearchParams,createClient:()=>({auth}),document:{getElementById:get,createElement:()=>({})},localStorage:{getItem:()=>null,setItem(){},removeItem(){}},location:{origin:'https://staging.example'},
   fetch:async path=>({ok:true,json:async()=>path==='/auth-config.json'?{url:'https://identity.example',key:'public'}:path.endsWith('/session')?{role:'editor'}:[]})});
  const source=(await readFile(new URL('../admin/app.mjs',import.meta.url),'utf8')).replace(/^import .*;\r?\n/gm,'');
  await vm.runInContext('(async()=>{'+source+'})()',context);
@@ -23,6 +23,8 @@ test('page events render the exact SDK QR, block workspace on failure and handle
  get('code').value='123456';await click('verify');assert.equal(get('workspace').hidden,true);assert.equal(get('message').textContent,'Invalid code');
  failVerify=false;await click('verify');assert.equal(get('workspace').hidden,false);assert.equal(get('qr').src,undefined);
  get('new-password').value='test-only-password-123';await click('update-password');assert.equal(updates,0);
- onState('PASSWORD_RECOVERY');assert.equal(get('workspace').hidden,true);assert.equal(get('recovery').hidden,false);
- await click('update-password');assert.equal(updates,1);assert.equal(get('recovery').hidden,true);assert.equal(get('workspace').hidden,true);assert.equal(get('login').hidden,false);
+ // A recovery exchanged in another tab is relayed by Supabase; it must not switch this tab.
+ onState('PASSWORD_RECOVERY');assert.equal(get('workspace').hidden,false);assert.equal(get('recovery').hidden,true);
+ await click('update-password');assert.equal(updates,0);
+ await click('logout');assert.equal(get('workspace').hidden,true);assert.equal(get('login').hidden,false);
 });

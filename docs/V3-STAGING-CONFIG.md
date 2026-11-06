@@ -10,8 +10,10 @@ Project reference supplied by owner: `cquhddsrhnacbkvszitl` (Singapore).
   non-login `jackstudio_api` role with limited grants. Staff and audit records cannot be modified
   by that runtime role. Existing columns/assets remain intact. Media metadata and upload intents added.
 - Staff UI: Supabase password login, TOTP enrollment/challenge, logout, password reset/recovery.
-  Tokens are memory-only; only the PKCE verifier is held in sessionStorage. Refreshing the page
-  normally requires sign-in again. Recovery links must open in the initiating browser tab/session.
+  Sessions, access and refresh tokens are memory-only (per tab). Only Supabase PKCE verifier entries
+  (`sb-<ref>-auth-token[-flow-<id>|-flows]-code-verifier`) are kept in localStorage, wrapped with a
+  24-hour expiry, so a recovery email can be opened in a new tab of the same browser profile.
+  Refreshing the page normally requires sign-in again. See "Password recovery" below.
 - Server checks JWT and MFA then database staff allowlist on every private request. A session
   endpoint returns subject/role, never credentials. Viewers cannot request or finalize uploads.
 - Signed authenticated-image uploads: random non-overwritable IDs, 10-per-minute database-backed
@@ -112,3 +114,20 @@ errors, challenge and verification sequencing, aal2 enforcement, existing factor
 logout cleanup. A DOM-event harness executes the actual admin module with a mocked provider to
 check the displayed src and workspace access. This is not a live browser/Supabase MFA or email test.
 Hosted authenticator scanning and same-tab PKCE recovery remain first-Staging acceptance checks.
+
+## Password recovery (PKCE, cross-tab)
+
+- "Send password reset email" creates a PKCE verifier. The verifier is stored in localStorage of the
+  same browser profile (never sessions or tokens), so the email link works in a new tab or window of
+  that browser. Another browser, profile or device cannot complete it; request a new email there.
+- Only the recovering tab opens the "Choose a new password" form. Other open admin tabs receive
+  Supabase's relayed event and show "Password recovery is open in another tab." without a session.
+- After the new password is saved, all sessions are revoked (global sign-out) and every stored
+  verifier entry is cleared. Unused verifiers expire after 24 hours; a blocked or full localStorage
+  falls back to this tab's memory (then the email must be opened from this tab's session only).
+- **Open the newest reset email.** With the default SDK configuration the email carries no flow id,
+  so the browser uses its most recent verifier; an older email fails closed and spends its one-time
+  code. Optional: enabling the SDK's experimental `appendPkceFlowIdToRedirects` makes every email
+  work independently (the admin already accepts `sb_flow_id`), but first change the Supabase Auth
+  Redirect URLs allow-list to tolerate the extra query parameter (e.g. `https://<staging>/admin**`);
+  with an exact `/admin` entry Supabase would fall back to the Site URL and recovery would break.

@@ -3,16 +3,21 @@ import {checkResult} from './auth-client.mjs';
 // Capture once and remove credentials before config/network requests or SDK initialization.
 export function captureCallback(location,history){
  const query=new URLSearchParams(location.search??''),hash=new URLSearchParams((location.hash??'').replace(/^#/,''));
- const keys=['code','access_token','refresh_token','type','error','error_code','error_description','token_hash'];
+ const keys=['code','sb_flow_id','access_token','refresh_token','type','error','error_code','error_description','token_hash'];
  if(!keys.some(k=>query.has(k)||hash.has(k)))return null;
  history.replaceState(null,'',location.pathname);
  const invalid=()=>({invalid:true});
  if(keys.some(k=>query.getAll(k).length>1||hash.getAll(k).length>1))return invalid();
  if(['error','error_code','error_description','token_hash'].some(k=>query.has(k)||hash.has(k)))return invalid();
  if(query.has('code')){
-  if(keys.some(k=>hash.has(k))||keys.some(k=>k!=='code'&&query.has(k))||!query.get('code'))return invalid();
-  return {code:query.get('code')};
+  if(keys.some(k=>hash.has(k))||keys.some(k=>!['code','sb_flow_id'].includes(k)&&query.has(k))||!query.get('code'))return invalid();
+  // Present only if Supabase's opt-in appendPkceFlowIdToRedirects is enabled; selects this email's
+  // verifier slot. Without it the SDK uses the newest verifier (the newest email must be opened).
+  const flowId=query.get('sb_flow_id');
+  if(query.has('sb_flow_id')&&!/^[A-Za-z0-9_-]{8,64}$/.test(flowId??''))return invalid();
+  return flowId?{code:query.get('code'),flowId}:{code:query.get('code')};
  }
+ if(hash.has('code')||hash.has('sb_flow_id'))return invalid();
  if(keys.some(k=>query.has(k))||!['invite','recovery'].includes(hash.get('type'))||!hash.get('access_token')||!hash.get('refresh_token'))return invalid();
  return {type:hash.get('type'),access_token:hash.get('access_token'),refresh_token:hash.get('refresh_token')};
 }
@@ -22,7 +27,9 @@ export async function completeCallback(auth,callback){
   if(callback.invalid)throw Error();
   let type=callback.type;
   if(callback.code){
-   const data=checkResult(await auth.exchangeCodeForSession(callback.code));
+   // The URL is already scrubbed, so the flow id is passed explicitly; without it the SDK would
+   // fall back to the most recent verifier and could burn this single-use code.
+   const data=checkResult(await (callback.flowId?auth.exchangeCodeForSession(callback.code,{flowId:callback.flowId}):auth.exchangeCodeForSession(callback.code)));
    if(!data.session||data.redirectType!=='recovery')throw Error();
    type='recovery';
   }else{
@@ -35,7 +42,7 @@ export async function completeCallback(auth,callback){
   return {type,email:user.email};
  }catch{
   await auth.signOut({scope:'local'}).catch(()=>{});
-  throw Error('Invitation or recovery link is invalid or expired. Request a new email; recovery links must open in the originating browser tab.');
+  throw Error('Invitation or recovery link is invalid or expired. Request a new email and open the newest link in the same browser where you requested it.');
  }
 }
 export async function setInvitePassword(auth,password,confirmation){
