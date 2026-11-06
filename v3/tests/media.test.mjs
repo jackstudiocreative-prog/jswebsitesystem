@@ -3,11 +3,6 @@ import assert from 'node:assert/strict';
 import { PGlite } from '@electric-sql/pglite';
 import { migrate } from '../src/migrate.mjs';
 import { signUpload,finalizeUpload,validateAsset } from '../src/media.mjs';
-import {authStorage} from '../admin/auth-client.mjs';
-test('token storage retains only PKCE verifier in tab storage',()=>{
- const map=new Map(),disk={getItem:k=>map.get(k)??null,setItem:(k,v)=>map.set(k,v),removeItem:k=>map.delete(k)};
- const storage=authStorage(disk);storage.setItem('access','secret');storage.setItem('auth-code-verifier','verifier');assert.equal(map.has('access'),false);assert.equal(storage.getItem('access'),'secret');assert.equal(map.get('auth-code-verifier'),'verifier');storage.removeItem('access');assert.equal(storage.getItem('access'),null);
-});
 test('uploads use verified provider metadata, isolation, idempotency and limits',async()=>{
  const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  try{

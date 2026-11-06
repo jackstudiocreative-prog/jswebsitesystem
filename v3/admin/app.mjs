@@ -1,10 +1,10 @@
 import {mountAdmin} from './catalog-ui.mjs';
 import {createClient} from '@supabase/supabase-js';
-import {authStorage,checkResult,verifiedFactor,enrollTotp,verifyTotp,recoverPassword} from './auth-client.mjs';
+import {authStorage,authOptions,checkResult,verifiedFactor,enrollTotp,verifyTotp,recoverPassword} from './auth-client.mjs';
 import {captureCallback,completeCallback,setInvitePassword} from './auth-callback.mjs';
 const callback=captureCallback(location,history);
 const $=id=>document.getElementById(id),message=text=>{$('message').textContent=text;};
-let adminUI,client,factor,role,recovery=false,invitation=false;
+let adminUI,client,factor,role,recovery=false,invitation=false,exchanging=false;
 async function api(path,body,method=body?'POST':'GET'){
  const {session}=checkResult(await client.auth.getSession());
  const response=await fetch('/api/v3/'+path,{method,headers:{Authorization:'Bearer '+(session?.access_token??''),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
@@ -23,10 +23,15 @@ async function signedIn(){
 }
 try{
  const config=await (await fetch('/auth-config.json')).json();if(!config.url||!config.key)throw Error('Staging authentication is not configured.');
- client=createClient(config.url,config.key,{auth:{flowType:'pkce',persistSession:true,storage:authStorage(sessionStorage),detectSessionInUrl:false}});
- client.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';$('qr').removeAttribute('src');$('qr').hidden=true;$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
+ // Only PKCE verifiers reach localStorage (see auth-client.mjs); sessions stay in memory.
+ let verifiers=null;try{verifiers=localStorage;}catch{} // blocked storage: verifier stays in this tab
+ client=createClient(config.url,config.key,{auth:authOptions(authStorage(verifiers))});
+ client.auth.onAuthStateChange(event=>{
+  // Supabase also relays other tabs' events. Only this tab's own code exchange opens recovery here.
+  if(event==='PASSWORD_RECOVERY'&&!exchanging){if(!recovery)message('Password recovery is open in another tab.');return;}
+  if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';$('qr').removeAttribute('src');$('qr').hidden=true;$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
  $('login').onsubmit=async e=>{e.preventDefault();try{checkResult(await client.auth.signInWithPassword({email:$('email').value,password:$('password').value}));$('password').value='';await signedIn();}catch(err){message(err.message);}};
- action('reset',async()=>{checkResult(await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/admin'}));message('If eligible, a recovery email has been sent. Open it in this browser.');});
+ action('reset',async()=>{checkResult(await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/admin'}));message('If eligible, a recovery email has been sent. Open the newest link in this browser.');});
  action('update-password',async()=>{if(!recovery)throw Error('Open a valid password recovery link first.');await recoverPassword(client.auth,$('new-password').value);$('new-password').value='';$('recovery').hidden=true;message('Password updated. Sign in again.');});
  action('set-invite-password',async()=>{if(!invitation)throw Error('Open a valid invitation first.');await setInvitePassword(client.auth,$('invite-password').value,$('invite-confirm').value);$('invite-password').value='';$('invite-confirm').value='';invitation=false;$('invitation').hidden=true;await signedIn();});
  action('enroll',async()=>{if(invitation||recovery)throw Error('Complete password setup first.');if(factor)throw Error('An authenticator is already selected.');const data=await enrollTotp(client.auth);factor=data.id;$('qr').src=data.qr;$('qr').hidden=false;message('Scan the QR code and enter the six-digit code.');});
@@ -39,7 +44,7 @@ try{
   const response=await fetch('https://api.cloudinary.com/v1_1/'+encodeURIComponent(intent.cloud_name)+'/image/upload',{method:'POST',body:form});if(!response.ok)throw Error('Upload failed; no database image was published.');
   await api('uploads/finalize',{id:intent.id});message('Master verified and stored privately.');await refresh();
  });
- const accepted=await completeCallback(client.auth,callback);
+ exchanging=true;let accepted;try{accepted=await completeCallback(client.auth,callback);}finally{exchanging=false;}
  if(accepted){
   invitation=accepted.type==='invite';recovery=accepted.type==='recovery';
   $('login').hidden=true;$('logout').hidden=false;$('workspace').hidden=true;$('mfa').hidden=true;

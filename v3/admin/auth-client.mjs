@@ -1,9 +1,35 @@
-export function authStorage(storage){
- const memory=new Map();
- return {getItem:key=>key.endsWith('-code-verifier')?storage.getItem(key):memory.get(key)??null,
- setItem:(key,value)=>key.endsWith('-code-verifier')?storage.setItem(key,value):memory.set(key,value),
- removeItem:key=>{storage.removeItem(key);memory.delete(key);}};
+// Supabase PKCE verifier entries: the legacy key, per-flow slots and the flow index
+// (auth-js 2.118: sb-<ref>-auth-token[-flow-<id>|-flows]-code-verifier). Only these are persisted,
+// in localStorage, so a recovery email opened in another tab of the same browser profile can finish
+// the exchange. A verifier is useless without the single-use code from the email. Sessions, access
+// and refresh tokens stay in this tab's memory only.
+const VERIFIER_KEY=/^sb-[a-z0-9]{1,64}-auth-token(?:-flow-[A-Za-z0-9_-]{8,64}|-flows)?-code-verifier$/;
+export const VERIFIER_TTL_MS=24*60*60*1000; // longest Supabase email link lifetime
+export const isVerifierKey=key=>VERIFIER_KEY.test(String(key));
+export function authStorage(verifierStore,{now=Date.now}={}){
+ const memory=new Map(),fallback=new Map();
+ const attempt=fn=>{try{return {ok:true,value:fn()};}catch{return {ok:false,value:null};}};
+ const read=key=>{
+  const raw=attempt(()=>verifierStore.getItem(key)).value;
+  if(raw==null)return fallback.get(key)??null;
+  let item=null;try{item=JSON.parse(raw);}catch{}
+  // Expired, foreign or tampered entries are discarded rather than handed to the SDK.
+  if(!item||typeof item.value!=='string'||!Number.isFinite(item.expires)||item.expires<=now()||item.expires>now()+VERIFIER_TTL_MS){attempt(()=>verifierStore.removeItem(key));return null;}
+  return item.value;
+ };
+ return {
+  getItem:key=>isVerifierKey(key)?read(key):memory.get(key)??null,
+  setItem:(key,value)=>{
+   if(!isVerifierKey(key)){memory.set(key,value);return;}
+   // Storage blocked or full (private mode, quota): keep the verifier in this tab only.
+   if(attempt(()=>verifierStore.setItem(key,JSON.stringify({value:String(value),expires:now()+VERIFIER_TTL_MS}))).ok)fallback.delete(key);
+   else fallback.set(key,String(value));
+  },
+  removeItem:key=>{if(isVerifierKey(key)){attempt(()=>verifierStore.removeItem(key));fallback.delete(key);}else memory.delete(key);}
+ };
 }
+// One place for the client options, so tests exercise exactly what the admin uses.
+export const authOptions=storage=>({flowType:'pkce',persistSession:true,storage,detectSessionInUrl:false});
 export function checkResult(result){if(result.error)throw result.error;return result.data;}
 export async function verifiedFactor(auth){
  const data=checkResult(await auth.mfa.listFactors());return data.totp.find(f=>f.status==='verified')?.id??null;
