@@ -120,3 +120,25 @@ starts loading as soon as the rest of the page has loaded (or when visitors get 
 its render loop pauses while it is scrolled out of view. The old GitHub Pages link maps to `/showroom/`;
 any other link keeps the cover-and-link behaviour. Re-run the script after changing the showroom repo.
 `/showroom/*` may be framed by this site only (`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`).
+
+## Other pages from the Shopify theme (Liquid)
+
+The menu pages (brand story, brand promise, our services, corporate solution, outlets, contact, product
+collection and the four policies) are built from the original Shopify Liquid sections, so they look the same
+as on Shopify. `v3/scripts/import-shopify-theme.mjs` copies the theme export into `shared/liquid-theme.mjs`
+(section schemas and each page's sections/settings, links rewritten to V3 addresses) and
+`src/liquid-files.mjs` (Liquid sources, outlet entries); `src/liquid.mjs` renders them with liquidjs.
+
+- Storefront: `/pages/<slug>` asks `GET /api/v3/storefront/theme/pages/<slug>` (live theme only), adds the
+  theme's global stylesheet, `runtime.js` and the section scripts from
+  `GET /api/v3/storefront/theme/scripts.js?s=type:id,…`. Inline section scripts and onclick handlers are
+  moved out of the markup, so `script-src 'self'` stays strict. `style-src` now allows inline styles (the
+  Shopify sections use them, as on Shopify). YouTube/Vimeo embeds and thumbnails are allowed.
+- Theme editor: the page picker at the top of the panel switches between the home page and these pages.
+  Sections and blocks use forms generated from their Shopify schema; "Page title and text" edits the page
+  text used by the policy pages. Edits are stored in the theme as `content.templates[slug]`; pages never
+  edited use the Shopify defaults. `POST /api/v3/themes/preview-pages` renders unsaved pages for staff.
+- Not carried over yet: Shopify-hosted videos (the YouTube link is used), product tags for the series
+  shelves on Product Collection, and sending the contact/newsletter forms (they say so instead of
+  pretending to send). Images follow the media rules above (placeholders on the public site until public
+  image delivery is enabled).

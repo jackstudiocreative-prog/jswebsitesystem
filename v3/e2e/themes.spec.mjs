@@ -35,6 +35,11 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
  await page.getByRole('button',{name:'Show About Us menu'}).click();await expect(page.getByRole('link',{name:'Brand Story',exact:true})).toBeVisible();
  await axe(page,'storefront home');
  // Published pages use the theme header and footer.
+ // Menu pages are built from the original Shopify sections and keep working (links, scripts, CSP).
+ await page.goto('/');await page.locator('.jh-nav').getByRole('link',{name:'Our Services',exact:true}).first().click();
+ await expect(page).toHaveURL(/\/pages\/our-services$/);await expect(page.locator('.lq-page [data-section-type="service-hero"]')).toBeVisible();
+ await page.goto('/pages/outlets');await expect(page.getByRole('heading',{name:'Aeon Bukit Tinggi'}).first()).toBeVisible();
+ await page.goto('/pages/privacy-policy');await expect(page.getByRole('heading',{level:1,name:'Privacy Policy'})).toBeVisible();
  await page.goto('/pages/does-not-exist');await expect(page.locator('.jh-header')).toBeVisible();await expect(page.locator('.jf-footer')).toBeVisible();
  // Mobile: the menu opens as a drawer.
  await page.setViewportSize({width:390,height:844});await page.goto('/');

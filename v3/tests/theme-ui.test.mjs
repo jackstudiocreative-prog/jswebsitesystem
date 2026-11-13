@@ -134,3 +134,23 @@ test('Preview opens the storefront in preview mode with the theme, including uns
   assert.match(saved.name,/unsaved changes/);assert.ok(saved.expires>Date.now());assert.deepEqual(saved.media,{},'only Cloudinary preview URLs are handed over');
  }finally{ui.destroy();delete window.open;delete window.localStorage;}
 });
+
+test('the editor switches to another page, edits its Shopify sections and saves them in the theme',async()=>{
+ const {document,window,find,label}=await dom(),fake=fakeApi(),base=fake.api,posts=[];
+ const api=async(path,body,method)=>{if(path==='themes/preview-pages'){posts.push(body);return {pages:{[body.page]:{html:`<h1>${body.content.templates?.[body.page]?.title??'Default'}</h1>`,scripts:[]}}};}return base(path,body,method);};
+ const ui=mountAdmin(api,'editor',()=>{});
+ try{
+  document.querySelector('[data-view="Website"]').click();await settle();
+  find('Edit theme').click();await settle(60);
+  const pick=document.querySelector('select[aria-label="Page to edit"]');assert.ok([...pick.options].some(o=>o.value==='outlets'));
+  pick.value='privacy-policy';pick.dispatchEvent(new window.Event('change'));await settle(80);
+  assert.ok(document.querySelector('.theme-preview iframe').srcdoc.includes('<h1>Default</h1>'),'page preview uses the server-rendered sections');
+  assert.ok([...document.querySelectorAll('.theme-tree-name')].some(n=>/Policy Page/.test(n.textContent)));
+  find('Page title and text').click();await settle();
+  const title=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Page title'));
+  title.querySelector('input').value='Privacy Notice';title.querySelector('input').dispatchEvent(new window.Event('input'));await settle(700);
+  assert.equal(posts.at(-1).content.templates['privacy-policy'].title,'Privacy Notice');assert.ok(document.querySelector('.theme-preview iframe').srcdoc.includes('<h1>Privacy Notice</h1>'));
+  find('Save').click();await settle();
+  assert.equal(fake.calls.find(c=>c.method==='PATCH').body.content.templates['privacy-policy'].title,'Privacy Notice');
+ }finally{ui.destroy();}
+});

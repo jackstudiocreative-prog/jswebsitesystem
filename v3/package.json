@@ -17,6 +17,7 @@
     "@supabase/supabase-js": "^2.118.0",
     "cloudinary": "^2.11.0",
     "jose": "^6.2.15",
+    "liquidjs": "^10.30.1",
     "pg": "^8.23.1"
   },
   "devDependencies": {

@@ -302,3 +302,4 @@ button.jh-nav-link{background:none;border:0;margin:0;font-family:inherit;line-he
 .jt-preview-bar{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px 14px;padding:8px 16px;background:#1d2a22;color:#fff;font:500 13px/1.4 Inter,system-ui,sans-serif;text-align:center}
 .jt-preview-bar button{border:1px solid rgba(255,255,255,.55);background:transparent;color:#fff;border-radius:6px;padding:4px 12px;font:inherit;cursor:pointer}
 .jt-preview-bar button:hover{background:rgba(255,255,255,.12)}
+.lq-form-note{margin:12px 0 0;padding:10px 14px;background:#f1ece0;border-left:3px solid #c4823a;font-size:13px;color:#4a3f33}

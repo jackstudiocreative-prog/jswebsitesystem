@@ -4,7 +4,7 @@ import { authorize,HttpError } from './auth.mjs';
 import { list,save,detail,dashboard } from './catalog.mjs';
 import { adjust,inventoryList,adjustmentList } from './inventory.mjs';
 import { listPages,pageDetail,createPage,savePage,publishPage,unpublishPage,restoreRevision,previewPage,previewDraft,publicPage } from './pages.mjs';
-import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,autofillTheme,previewTheme,previewThemeDraft,publicTheme } from './themes.mjs';
+import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,autofillTheme,previewTheme,publicThemePage,previewThemePages,themeScripts,previewThemeDraft,publicTheme } from './themes.mjs';
 import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates,storefrontProduct } from './commerce.mjs';
 import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
@@ -57,6 +57,9 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   const published=path.match(/^\/api\/v3\/storefront\/pages\/([^/]{1,100})$/);
   if(published){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicPage(db,published[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
   // Public live theme (no staff token): header, home page sections and footer of the published theme only.
+  const themePage=path.match(/^\/api\/v3\/storefront\/theme\/pages\/([a-z0-9-]{1,100})$/);
+  if(themePage){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicThemePage(db,themePage[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
+  if(path==='/api/v3/storefront/theme/scripts.js'){if(req.method!=='GET')throw new HttpError(405,'Method not available');const js=await themeScripts(url.searchParams.get('s'));res.setHeader('Content-Type','text/javascript; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300, s-maxage=3600');res.end(js);return;}
   if(path==='/api/v3/storefront/theme'){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicTheme(db);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
   // Public storefront commerce: bag pricing, checkout and order status (the order access token stays in
   // the request body, never the URL).
@@ -96,10 +99,10 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   // page[1]: unsaved preview; page[2]: page id; page[3]: action; page[4]: version id.
   const action=page?.[1]?'draft-preview':page?.[3]?.startsWith('revisions/')?'restore':page?.[3];
   if(page&&!(action==='draft-preview'?['POST']:!page[2]?['GET','POST']:!action?['GET','PATCH']:action==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
-  const theme=path.match(/^\/api\/v3\/themes(?:\/(preview)|\/([1-9]\d{0,17})(?:\/(preview|publish|archive|autofill))?)?$/);
+  const theme=path.match(/^\/api\/v3\/themes(?:\/(preview|preview-pages)|\/([1-9]\d{0,17})(?:\/(preview|publish|archive|autofill))?)?$/);
   // theme[1]: unsaved preview; theme[2]: theme id; theme[3]: action.
-  const themeAction=theme?.[1]?'draft-preview':theme?.[3];
-  if(theme&&!(themeAction==='draft-preview'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
+  const themeAction=theme?.[1]==='preview-pages'?'pages-preview':theme?.[1]?'draft-preview':theme?.[3];
+  if(theme&&!(themeAction==='draft-preview'||themeAction==='pages-preview'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
   // Shopify image import: GET lists what is still to import, POST imports one small batch.
   const mediaImport=path==='/api/v3/media/import';
   if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
@@ -130,7 +133,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
    if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
-   else if(theme){result=themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'?200:201;}
+   else if(theme){result=themeAction==='pages-preview'?await previewThemePages(db,input,options.cloud??cloudAdapter()):themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'||themeAction==='pages-preview'?200:201;}
    else if(mediaImport)result=await importShopify(db,claims.sub,input,options.cloud??cloudAdapter());
    else if(page){result=action==='draft-preview'?await previewDraft(db,input,options.cloud??cloudAdapter()):!page[2]?await createPage(db,input,claims.sub):!action?await savePage(db,page[2],input,claims.sub):action==='publish'?await publishPage(db,page[2],input,claims.sub):action==='unpublish'?await unpublishPage(db,page[2],input,claims.sub):await restoreRevision(db,page[2],page[4],input,claims.sub);res.statusCode=page[2]||action==='draft-preview'?200:201;}
    else{
