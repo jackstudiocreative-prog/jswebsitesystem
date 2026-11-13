@@ -14,7 +14,7 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
  await page.getByRole('button',{name:'Edit Hero banner'}).click();
  await page.getByLabel('Heading',{exact:true}).fill(heading);
  await expect(page.getByText('Showing your unsaved changes. Save to keep them.')).toBeVisible();
- await page.getByRole('button',{name:'← All sections'}).click();
+ await page.getByRole('button',{name:'Close settings'}).click();
  await page.getByRole('button',{name:'Edit Announcement bar'}).click();
  await page.locator('.list-item summary').first().click();
  await page.getByLabel('Text *').first().fill('FREE NAME ENGRAVING ON EVERY WALLET');
