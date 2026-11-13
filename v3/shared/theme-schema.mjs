@@ -1,9 +1,10 @@
 // Online Store theme schema, shared by the API (validation), the admin (forms) and the renderers.
-// A theme is {settings, header, sections, footer}: global style settings, the header group
-// (announcement bar + header), the home page template sections and the footer group.
+// A theme is {settings, header, sections, footer, templates}: global style settings, the header group
+// (announcement bar + header), the home page template sections, the footer group and the other pages.
 // Every value is validated and unknown fields are rejected, exactly like page sections.
 import {SECTION_TYPES,normalizeSections,validLink,defaults as pageDefaults,newSectionId} from './page-schema.mjs';
 export {validLink,newSectionId};
+import {normalizeTemplates,templateMedia} from './page-templates.mjs';
 
 const text=(key,label,max,extra={})=>({key,label,type:'text',max,...extra});
 const area=(key,label,max,extra={})=>({key,label,type:'textarea',max,...extra});
@@ -132,7 +133,7 @@ function normalizeSection(s,where,allowed,seen){
 // Returns a clean theme content object or throws a staff-readable validation error.
 export function normalizeTheme(content){
  if(!plain(content))fail('Theme content must be an object');
- if(Object.keys(content).some(k=>!['settings','header','sections','footer'].includes(k)))fail('Theme content has an unknown property');
+ if(Object.keys(content).some(k=>!['settings','header','sections','footer','templates'].includes(k)))fail('Theme content has an unknown property');
  const seen=new Set();
  const group=(name,value,allowed,max,unique)=>{
   if(!Array.isArray(value??[])||(value??[]).length>max)fail(`${name}: use up to ${max} sections`);
@@ -144,7 +145,9 @@ export function normalizeTheme(content){
   settings:normalizeFields(THEME_SETTINGS,content.settings,'Theme settings'),
   header:group('Header',content.header,GROUPS.header,2,true),
   sections:group('Template',content.sections,TEMPLATE_TYPES,MAX_TEMPLATE_SECTIONS,false),
-  footer:group('Footer',content.footer,GROUPS.footer,1,true)
+  footer:group('Footer',content.footer,GROUPS.footer,1,true),
+  // Other pages (/pages/<slug>): Shopify sections per page; absent pages use the Shopify defaults.
+  ...(content.templates!=null?{templates:normalizeTemplates(content.templates)}:{})
  };
 }
 // Every media, collection and product ID a theme refers to (checked by the API).
@@ -152,6 +155,7 @@ export function themeReferences(content){
  const refs={media:new Set(),collections:new Set(),products:new Set()};
  const walk=(fields,v)=>{for(const f of fields){const x=v[f.key];if(x==null)continue;if(f.type==='media')refs.media.add(x);else if(f.type==='collection')refs.collections.add(x);else if(f.type==='products')for(const p of x)refs.products.add(p);else if(f.type==='list')for(const item of x)walk(f.fields,item);}};
  for(const s of [...content.header,...content.sections,...content.footer])walk(sectionFields(s.type),s.settings);
+ for(const id of templateMedia(content.templates))refs.media.add(id);
  return refs;
 }
 

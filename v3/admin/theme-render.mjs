@@ -108,3 +108,8 @@ export function renderThemeBody(data,media={},o={}){
 export function themeDocument(data,media,origin=''){
  return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Theme preview</title><link rel="stylesheet" href="${origin}/styles.css"><link rel="stylesheet" href="${origin}/page-sections.css"><link rel="stylesheet" href="${origin}/theme.css"><style>${themeCss(data.settings)}a,button{pointer-events:none}</style></head><body class="js-body jt-body">${renderThemeBody(data,media,{inline:true})}</body></html>`;
 }
+// Admin preview of another page (/pages/<slug>): theme header and footer around the page's Shopify
+// sections (rendered by the server), with the Shopify theme's global stylesheet.
+export function themePageDocument(data,media,origin,pageHtml){
+ return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Theme preview</title><link rel="stylesheet" href="${origin}/styles.css"><link rel="stylesheet" href="${origin}/theme-assets/shopify/jack-studio-1to1.css"><link rel="stylesheet" href="${origin}/page-sections.css"><link rel="stylesheet" href="${origin}/theme.css"><style>${themeCss(data.settings)}a,button{pointer-events:none}</style></head><body class="js-body jt-body lq-body">${renderThemeHeader(data,media,{inline:true})}<main id="MainContent" class="lq-page">${pageHtml}</main>${renderThemeFooter(data,media,{inline:true})}</body></html>`;
+}

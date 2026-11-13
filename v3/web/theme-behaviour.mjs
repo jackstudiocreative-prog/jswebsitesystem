@@ -100,6 +100,8 @@ function previewBar(name){
  exit.addEventListener('click',()=>{try{sessionStorage.removeItem(PREVIEW);}catch{}location.reload();});
  bar.append(text,exit);document.body.prepend(bar);
 }
+// Pages (/pages/<slug>) of the admin preview theme, already rendered by the admin; null when not previewing.
+export const previewPages=()=>previewTheme()?.pages??null;
 // Fetches the live theme (or the admin preview theme); resolves to null when none is published.
 export async function liveTheme(){
  const p=previewTheme();

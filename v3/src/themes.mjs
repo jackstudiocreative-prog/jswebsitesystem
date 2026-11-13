@@ -3,6 +3,8 @@ import {SECTION_TYPES} from '../shared/page-schema.mjs';
 import {resolvePageSections} from './pages.mjs';
 import {HttpError} from './auth.mjs';
 import {autofillThemeImages} from './shopify-import.mjs';
+import {renderPage,scriptBundle} from './liquid.mjs';
+import {templateFor,PAGE_SLUGS,SECTION_SCHEMAS} from '../shared/page-templates.mjs';
 // Online Store themes. One theme can be live; the rest are the theme library. As in Shopify, saving
 // the live theme changes the storefront immediately; staff duplicate it to work on a private copy.
 // Writes lock the row and check an integer revision so two editors cannot overwrite each other.
@@ -124,6 +126,34 @@ export async function previewThemeDraft(db,input,cloud){
  object(input,['content']);const clean=content(input.content);await checkReferences(db,clean);
  const resolved=await resolveTheme(db,clean);
  return {theme:resolved,media:await mediaFor(db,resolved,cloud),expiresIn:300};
+}
+// Other storefront pages (/pages/<slug>) are rendered from the theme's Shopify Liquid sections.
+async function pageHtml(db,content,slug,cloud){
+ const t=templateFor(content,slug);if(!t)return null;
+ const r=await renderPage(db,slug,t,{mediaUrl:cloud?m=>cloud.preview(m):null});
+ const ids=new Set(r.scripts.map(s=>s.id));
+ return {slug,title:t.title,html:r.html,scripts:t.order.filter(id=>ids.has(id)).map(id=>`${t.sections[id].type}:${id}`)};
+}
+export async function publicThemePage(db,slug){
+ if(!PAGE_SLUGS.includes(slug))throw new HttpError(404,'Page not found');
+ const theme=(await db.query('SELECT content FROM themes WHERE is_live AND NOT archived')).rows[0];if(!theme)throw new HttpError(404,'No live theme');
+ return pageHtml(db,content(theme.content),slug,null);
+}
+// Staff preview of unsaved pages (all pages, or one with {page}); images use signed private previews.
+export async function previewThemePages(db,input,cloud){
+ object(input,['content','page']);const clean=content(input.content);await checkReferences(db,clean);
+ const slugs=input.page!=null?[String(input.page)]:PAGE_SLUGS;if(slugs.some(s=>!PAGE_SLUGS.includes(s)))bad('Unknown page');
+ const pages={};for(const slug of slugs)pages[slug]=await pageHtml(db,clean,slug,cloud);
+ return {pages,expiresIn:300};
+}
+// Section scripts for a page (?s=type:id,…). They only depend on the section id, so the file is cacheable
+// and works for unsaved previews too.
+export async function themeScripts(spec){
+ const list=String(spec??'').split(',').filter(Boolean);
+ if(list.length>40||list.some(x=>!/^[a-z0-9_-]{1,80}:[A-Za-z0-9_-]{1,80}$/.test(x)||!SECTION_SCHEMAS[x.split(':')[0]]))throw new HttpError(400,'Invalid sections');
+ const none={query:async()=>({rows:[]})},scripts=[];
+ for(const x of list){const [type,id]=x.split(':');scripts.push(...(await renderPage(none,'scripts',{order:[id],sections:{[id]:{type,settings:{},blocks:{},block_order:[]}}})).scripts);}
+ return scriptBundle(scripts);
 }
 // Public, unauthenticated: the live theme only. Images are referenced by ID; public image
 // delivery is not enabled yet (originals stay private), so the storefront shows placeholders.

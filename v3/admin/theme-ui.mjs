@@ -2,7 +2,9 @@
 // (header, home page template, footer and theme settings with a live device preview), modelled on
 // Shopify's Online Store. Uses the workspace helpers from catalog-ui.mjs.
 import {THEME_SETTINGS,THEME_SECTIONS,TEMPLATE_TYPES,GROUPS,MAX_TEMPLATE_SECTIONS,sectionLabel,sectionFields,defaults,fieldDefaults,newSectionId} from '../shared/theme-schema.mjs';
-import {themeDocument} from './theme-render.mjs';
+import {themeDocument,themePageDocument} from './theme-render.mjs';
+import {createPageTools} from './theme-pages-ui.mjs';
+import {PAGE_SLUGS,PAGE_TEMPLATES} from '../shared/page-templates.mjs';
 const DEVICES=[['desktop','Desktop',1280],['tablet','Tablet',768],['mobile','Mobile',390]];
 const when=value=>value?new Intl.DateTimeFormat('en-MY',{dateStyle:'medium',timeStyle:'short'}).format(new Date(value)):'—';
 const safeMedia=media=>Object.fromEntries(Object.entries(media??{}).filter(([,url])=>{try{const u=new URL(url);return u.protocol==='https:'&&u.hostname==='api.cloudinary.com';}catch{return false;}}));
@@ -16,17 +18,19 @@ export function createThemes(h){
   let width=1280;
   const fit=()=>{const avail=stage.clientWidth||width,scale=Math.min(1,avail/width);frame.style.width=width+'px';frame.style.height=height+'px';frame.style.transform=`scale(${scale})`;frame.style.left=Math.max(0,Math.round((avail-width*scale)/2))+'px';stage.style.height=Math.round(height*scale)+'px';};
   if(typeof window!=='undefined')window.addEventListener('resize',fit);
-  return {stage,show:data=>{frame.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());fit();},setWidth:w=>{width=w;fit();},fit,destroy:()=>typeof window!=='undefined'&&window.removeEventListener('resize',fit)};
+  return {stage,show:data=>{frame.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());fit();},showPage:(data,html)=>{frame.srcdoc=themePageDocument(data.theme,safeMedia(data.media),origin(),html);fit();},setWidth:w=>{width=w;fit();},fit,destroy:()=>typeof window!=='undefined'&&window.removeEventListener('resize',fit)};
  }
  // Full-page preview: opens the real storefront in a new tab with this theme (unsaved edits included),
  // so menus, tabs and links to other pages all work. The theme is handed over through this browser's
  // storage only (same site); visitors never see it. "Exit preview" in the tab returns to the live theme.
  function openPreview(data,title){
   if(typeof window==='undefined'||!window.open)return;
-  try{window.localStorage.setItem('jt-theme-preview',JSON.stringify({name:title,theme:data.theme,media:safeMedia(data.media),expires:Date.now()+2*3600*1000}));}
+  try{window.localStorage.setItem('jt-theme-preview',JSON.stringify({name:title,theme:data.theme,media:safeMedia(data.media),pages:data.pages??null,expires:Date.now()+2*3600*1000}));}
   catch{notify('Preview needs browser storage. Allow site data for this site and try again.');return;}
   if(!window.open('/?theme_preview=1','_blank'))notify('Allow pop-ups for this site to open the preview.');
  }
+ // Saved theme with its other pages rendered (editors only; viewers preview the home page).
+ async function savedPreview(id){const data=await api(`themes/${id}/preview`);if(!readOnly){const t=await api('themes/'+id);data.pages=(await api('themes/preview-pages',{content:t.content},'POST')).pages;}return data;}
  const confirmed=text=>typeof window==='undefined'||window.confirm(text);
  async function rename(theme){
   const next=typeof window!=='undefined'?window.prompt('Theme name',theme.name):null;if(next==null||next.trim()===theme.name)return;
@@ -55,7 +59,7 @@ export function createThemes(h){
    info.append(el('h3',live.name),el('p',`Last saved ${when(live.updated_at)}`,'muted'),el('p',`Published ${when(live.published_at)}`,'muted'));
    const actions=el('div',undefined,'actions'),edit=button(readOnly?'View theme':'Edit theme',()=>editTheme(live.id));edit.classList.add('primary');
    const view=el('a','View store','button-link');view.href='/';view.target='_blank';view.rel='noopener';
-   actions.append(edit,view,button('Preview',async()=>openPreview(await api(`themes/${live.id}/preview`),live.name)),button('Duplicate',()=>duplicate(live),readOnly||data.items.length>=max),button('Rename',()=>rename(live),readOnly),button('Auto-fill images',()=>autofill(live),readOnly));info.append(actions);
+   actions.append(edit,view,button('Preview',async()=>openPreview(await savedPreview(live.id),live.name)),button('Duplicate',()=>duplicate(live),readOnly||data.items.length>=max),button('Rename',()=>rename(live),readOnly),button('Auto-fill images',()=>autofill(live),readOnly));info.append(actions);
    grid.append(frame.stage,info);cur.append(grid);
    api(`themes/${live.id}/preview`).then(p=>{if(current(t))frame.show(p);}).catch(err=>{frame.stage.replaceWith(el('p','Preview unavailable: '+err.message,'muted'));});
   }
@@ -65,7 +69,7 @@ export function createThemes(h){
   for(const theme of library){
    const row=el('div',undefined,'theme-row'),copy=el('div');copy.append(el('strong',theme.name),el('span',`Last saved ${when(theme.updated_at)}`,'muted'));
    const tools=el('div',undefined,'row-actions'),pub=button('Publish',()=>publish(theme),readOnly);pub.classList.add('primary');
-   tools.append(pub,button(readOnly?'View':'Edit theme',()=>editTheme(theme.id)),button('Preview',async()=>openPreview(await api(`themes/${theme.id}/preview`),theme.name)),button('Duplicate',()=>duplicate(theme),readOnly||data.items.length>=max),button('Rename',()=>rename(theme),readOnly),button('Auto-fill images',()=>autofill(theme),readOnly),
+   tools.append(pub,button(readOnly?'View':'Edit theme',()=>editTheme(theme.id)),button('Preview',async()=>openPreview(await savedPreview(theme.id),theme.name)),button('Duplicate',()=>duplicate(theme),readOnly||data.items.length>=max),button('Rename',()=>rename(theme),readOnly),button('Auto-fill images',()=>autofill(theme),readOnly),
     button('Remove',async()=>{if(!confirmed(`Remove "${theme.name}" from the theme library?`))return;await api(`themes/${theme.id}/archive`,{revision:theme.revision},'POST');notify('Theme removed.');await navigate('Website');},readOnly));
    row.append(copy,tools);lib.append(row);
   }
@@ -79,7 +83,7 @@ export function createThemes(h){
   const t=ticket();const [theme,collections]=await Promise.all([api('themes/'+id),all('collections')]);if(!current(t))return;
   header(readOnly?'View theme':'Edit theme',`${theme.name} · ${theme.is_live?'Live theme: saving updates the storefront immediately.':'Library theme: changes stay private until you publish it.'}`);
   const content=structuredClone(theme.content),mediaLabels=new Map(),openItems=new WeakSet();
-  let dirty=false,device='desktop',timer=null,view={mode:'tree'};
+  let dirty=false,device='desktop',timer=null,view={mode:'tree'},page='home';
   const touch=()=>{dirty=true;setDirty(true);schedule();};
   // Toolbar.
   const bar=el('div',undefined,'theme-toolbar'),devices=el('div',undefined,'device-toggle');devices.setAttribute('role','group');devices.setAttribute('aria-label','Preview device');
@@ -87,7 +91,7 @@ export function createThemes(h){
   for(const [k,label,width] of DEVICES){const n=button(`${label} · ${width}px`,()=>{device=k;for(const b of devices.children)b.setAttribute('aria-pressed',String(b===n));frame.setWidth(width);});n.setAttribute('aria-pressed',String(k===device));devices.append(n);}
   const save=button('Save',async()=>{await persist();notify(theme.is_live?'Theme saved. The storefront is updated.':'Theme saved.');},readOnly);save.classList.add('primary');
   let last=null;
-  const preview=button('Preview',async()=>{if(!readOnly&&dirty)await refresh();if(!last)await refresh();if(last)openPreview(last,theme.name+(dirty?' (unsaved changes)':''));});
+  const preview=button('Preview',async()=>{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!readOnly)data.pages=(await api('themes/preview-pages',{content},'POST')).pages;openPreview(data,theme.name+(dirty?' (unsaved changes)':''));});
   const actions=el('div',undefined,'actions');actions.append(preview,save);
   if(!theme.is_live)actions.append(button(dirty?'Save and publish':'Publish',async()=>{if(!confirmed(`Publish "${theme.name}"? It replaces the current theme on the storefront.`))return;if(dirty)await persist();await api(`themes/${id}/publish`,{revision:theme.revision},'POST');dirty=false;setDirty(false);notify(`${theme.name} is now live.`);await navigate('Website');},readOnly));
   actions.append(button('Back to Online Store',()=>navigate('Website')));
@@ -98,7 +102,8 @@ export function createThemes(h){
   function schedule(){if(readOnly)return;clearTimeout(timer);timer=setTimeout(()=>refresh(),600);}
   async function refresh(){
    note.textContent='Updating preview…';
-   try{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!current(t))return;last=data;frame.show(data);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
+   try{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!current(t))return;last=data;
+    if(page!=='home'){const pages=(await api('themes/preview-pages',{content:readOnly?theme.content:content,page},'POST')).pages;if(!current(t))return;frame.showPage(data,pages[page].html);}else frame.show(data);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
    catch(err){note.textContent='Preview not updated: '+err.message;}
   }
   // Panel, laid out like Shopify's editor: a compact section tree (icon, name, eye toggle, ··· menu)
@@ -110,6 +115,7 @@ export function createThemes(h){
    gear:'M10 7.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z|M10 2.9v2M10 15.1v2M2.9 10h2M15.1 10h2M5 5l1.4 1.4M13.6 13.6 15 15M5 15l1.4-1.4M13.6 6.4 15 5'};
   function icon(name){const g=document.createElementNS(NS,'svg');g.setAttribute('viewBox','0 0 20 20');g.setAttribute('aria-hidden','true');g.setAttribute('focusable','false');g.setAttribute('class','theme-icon');for(const d of ICONS[name].split('|')){const p=document.createElementNS(NS,'path');p.setAttribute('d',d);g.append(p);}return g;}
   const hasImage=type=>sectionFields(type).some(f=>f.type==='media'||(f.type==='list'&&f.fields?.some(x=>x.type==='media')));
+  const pages=createPageTools({el,button,field,select,mediaPicker,thumb,previews,icon,moreMenu,confirmed,readOnly,touch,collections:collections??[],mediaLabels});
   const iconFor=(group,type)=>group==='header'?'header':group==='footer'?'footer':hasImage(type)?'image':'section';
   // "···" menu: a small popover of extra actions (move, hide, remove).
   function moreMenu(name,items){
@@ -120,9 +126,13 @@ export function createThemes(h){
   }
   function draw(){
    panel.replaceChildren();panel.classList.toggle('has-settings',view.mode!=='tree');
-   panel.append(el('h2','Home page','theme-panel-title'));
+   // Page picker (as in Shopify's editor): the home page or another storefront page.
+   const pick=select([['home','Home page'],...PAGE_SLUGS.map(s=>[s,pages.template(content,s,false).title])],page);pick.setAttribute('aria-label','Page to edit');pick.classList.add('theme-page-select');
+   pick.addEventListener('change',()=>{page=pick.value;view={mode:'tree'};draw();refresh();});
+   const head=el('div',undefined,'theme-panel-title');head.append(pick);panel.append(head);
    const tree=el('div',undefined,'theme-tree-wrap');panel.append(tree);
    for(const [group,title,aria,list] of groups){
+    if(group==='sections'&&page!=='home'){tree.append(pages.tree(content,page,view,v=>{view=v;draw();},draw));continue;}
     tree.append(el('h3',title,'theme-group-title'));
     const ol=el('ol',undefined,'theme-tree');tree.append(ol);
     for(const [i,s] of list.entries()){
@@ -148,7 +158,15 @@ export function createThemes(h){
    }
    const settings=button('',()=>{view={mode:'settings'};draw();});settings.classList.add('theme-settings-open');settings.append(icon('gear'),el('span','Theme settings'));if(view.mode==='settings')settings.classList.add('is-selected');tree.append(settings);
    if(view.mode==='settings')return drawForm('Theme settings',THEME_SETTINGS,content.settings,null,'gear');
+   if(view.mode==='lq-section'&&page!=='home'&&pages.template(content,page,false).sections[view.id]){const f=pages.sectionForm(content,page,view.id,draw);return drawCard(f.title,'section',f.body,readOnly?null:[[f.hidden?'Show section':'Hide section',f.toggle],['Remove section',()=>{if(!confirmed('Remove this section from the page?'))return;f.remove();view={mode:'tree'};draw();}]]);}
+   if(view.mode==='lq-page'&&page!=='home')return drawCard('Page title and text','gear',pages.pageForm(content,page),null);
    if(view.mode==='section'){const list=content[view.group],s=list.find(x=>x.id===view.id);if(s)return drawForm(sectionLabel(s.type),sectionFields(s.type),s.settings,{list,s,group:view.group},iconFor(view.group,s.type));view={mode:'tree'};panel.classList.remove('has-settings');}
+  }
+  function drawCard(title,iconName,body,menu){
+   const card=el('div',undefined,'theme-settings-card'),head=el('div',undefined,'theme-settings-head');head.append(icon(iconName),el('h2',title,'theme-form-title'));
+   if(menu)head.append(moreMenu(title,menu.map(([text,fn])=>[text,fn,false])));
+   const close=button('×',()=>{view={mode:'tree'};draw();});close.classList.add('theme-close');close.setAttribute('aria-label','Close settings');head.append(close);
+   card.append(head,body);panel.append(card);
   }
   function drawForm(title,fields,values,ctx,iconName){
    const card=el('div',undefined,'theme-settings-card'),head=el('div',undefined,'theme-settings-head');

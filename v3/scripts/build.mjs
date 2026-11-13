@@ -15,8 +15,7 @@ await copyFile(new URL('admin/theme.css',root),new URL('public/theme.css',root))
 await mkdir(new URL('public/fonts/',root),{recursive:true});
 for(const [pkg,file] of [['bebas-neue','bebas-neue-latin-400-normal.woff2'],...['400','500','600','700'].map(w=>['inter',`inter-latin-${w}-normal.woff2`])])await copyFile(new URL(`node_modules/@fontsource/${pkg}/files/${file}`,root),new URL('public/fonts/'+file,root));
 // Built-in theme images (the virtual-showroom cover was a Shopify theme asset, not a library file).
-await mkdir(new URL('public/theme-assets/',root),{recursive:true});
-await copyFile(new URL('web/theme-assets/virtual-showroom-cover.jpg',root),new URL('public/theme-assets/virtual-showroom-cover.jpg',root));
+await cp(new URL('web/theme-assets/',root),new URL('public/theme-assets/',root),{recursive:true});
 // 3D virtual showroom (see scripts/import-showroom.py), embedded in the home page.
 await cp(new URL('showroom/',root),new URL('public/showroom/',root),{recursive:true});
 await copyFile(new URL('web/page.html',root),new URL('public/page.html',root));
