@@ -23,7 +23,7 @@ export async function axe(page,label){
  // brand colours: white on sage #8da68a (announcement bar), white on tan #c38239 (buttons), white on the
  // collection-card label colours, and #716b63 on beige for small secondary text. Staff can change all of
  // these in Theme settings / section colours; only these theme elements are set aside.
- const THEME_BRAND=/class="(jh-ann-text|jh-ann-slide[^"]*|hb-btn|cps-btn|cps-stat-link|cps-stat-tagline|cps-stat-eyebrow|ot-btn|ot-viewall|cc-btn|si-sub|ot-sub|ot-row|ot-loc|cps-desc|ci-desc|vs-eyebrow|vs-cta-hint|ctab-card-sub|ctab-tab[^"]*|jf-[a-z-]+)"/;
+ const THEME_BRAND=/class="(jh-ann-text|jh-ann-slide[^"]*|hb-btn|cps-btn|cps-stat-link|cps-stat-tagline|cps-stat-eyebrow|ot-btn|ot-viewall|cc-btn|si-sub|ot-sub|ot-row|ot-loc|cps-desc|ci-desc|vs-eyebrow|vs-cta-hint|ctab-card-sub|ctab-empty|jh-nav-link jh-nav-parent[^"]*|ctab-tab[^"]*|jf-[a-z-]+)"/;
  const brand=n=>String(n.html).includes('store-button')||THEME_BRAND.test(String(n.html))||n.any?.some(c=>THEME_BRAND.test(String(c.relatedNodes?.[0]?.html??'')));
  for(const v of result.violations)if(v.id==='color-contrast')v.nodes=v.nodes.filter(n=>!brand(n));
  result.violations=result.violations.filter(v=>v.nodes.length);

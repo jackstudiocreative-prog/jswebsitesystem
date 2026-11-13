@@ -21,6 +21,8 @@ function fakeApi(){
   const m=path.match(/^themes\/(\d)$/);
   if(m&&!body)return themes.find(t=>t.id===m[1]);
   if(m&&method==='PATCH'){const t=themes.find(x=>x.id===m[1]);Object.assign(t,body,{revision:t.revision+1});return t;}
+  if(path==='themes/preview-pages'){const pg=body.page??'home',t=body.content.templates??{};const all=body.page?[pg]:['home','outlets','_frame'];return {pages:Object.fromEntries(all.map(k=>[k,{header:`<p class="hdr">${t.header?.sections?.['jack-header']?.settings?.logo_text??'Header'}</p>`,html:`<h1>${t[k]?.title??k}</h1>${(t[k]?.order??[]).map(id=>`<section>${id}</section>`).join('')}`,footer:'<p>Footer</p>',scripts:[]}]))};}
+  if(/^themes\/\d\/preview\?page=/.test(path))return {theme:content,media:{},page:{header:'<p>Saved header</p>',html:'<h1>Saved '+path.split('=')[1]+'</h1>',footer:''}};
   if(path==='themes/preview')return {theme:{...body.content,header:body.content.header.filter(s=>!s.hidden),sections:body.content.sections.filter(s=>!s.hidden)},media:{}};
   if(/^themes\/\d\/preview$/.test(path))return {theme:content,media:{'9':'https://evil.example/x.png'}};
   if(/^themes\/\d\/publish$/.test(path)){themes=themes.map(t=>({...t,is_live:path.startsWith('themes/'+t.id+'/')}));return {};}
@@ -53,56 +55,44 @@ test('Online Store shows the live theme and library; library actions call the AP
  }finally{ui.destroy();}
 });
 
-test('theme editor edits header menu, sections and settings, previews unsaved changes and saves',async()=>{
+test('theme editor: Shopify header, home sections and footer; edits are previewed and saved in the theme',async()=>{
  const {document,window,find,label}=await dom(),fake=fakeApi();
  const ui=mountAdmin(fake.api,'editor',()=>{});
  try{
   document.querySelector('[data-view="Website"]').click();await settle();
   find('Edit theme').click();await settle(60);
-  assert.equal(document.querySelectorAll('.theme-tree-item').length,11,'2 header + 8 template + 1 footer sections');
-  // Header: rename a menu item and add a drop-down entry.
-  label('Edit Header').click();await settle();
-  const menuLabel=[...document.querySelectorAll('.list-item label')].find(l=>l.textContent.startsWith('Label'));
-  menuLabel.querySelector('input').value='Start';menuLabel.querySelector('input').dispatchEvent(new window.Event('input'));
-  find('Add to menu').click();await settle();
-  assert.match([...document.querySelectorAll('.list-field legend')][0].textContent,/Menu · 8\/10/);
+  const groups=[...document.querySelectorAll('.theme-group-title')].map(n=>n.textContent);assert.deepEqual(groups,['Header','Template','Footer']);
+  assert.ok(document.querySelector('.theme-preview iframe').srcdoc.includes('<p class="hdr">'),'the preview is the whole page from the server');
+  // Header: change the announcement text (Shopify header settings).
+  [...document.querySelectorAll('.theme-tree-open')][0].click();await settle();
+  const ann=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Fallback logo text'));assert.ok(ann,'header setting from the Shopify schema');
+  const input=ann.querySelector('input');input.value='FREE ENGRAVING';input.dispatchEvent(new window.Event('input'));
   label('Close settings').click();await settle();
-  // Template: hide, reorder and add a section; theme settings colour.
-  label('Hide Icon row').click();await settle();
-  label('Move up Collection cards').click();await settle();
-  document.querySelector('select[aria-label="Section to add to Template · Home page"]').value='rich_text';
-  [...document.querySelectorAll('button')].filter(b=>b.textContent==='Add section').at(-1).click();await settle();
-  const body=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Text'));
-  body.querySelector('textarea').value='Hand-finished in Klang.';body.querySelector('textarea').dispatchEvent(new window.Event('input'));
-  label('Close settings').click();await settle();
-  find('Theme settings').click();await settle();
-  const accent=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Buttons'));
-  accent.querySelector('input').value='#8DA68A';accent.querySelector('input').dispatchEvent(new window.Event('input'));
-  await settle(700);
-  const preview=fake.calls.filter(c=>c.path==='themes/preview').at(-1);assert.ok(preview,'unsaved edits are previewed');
-  const c=preview.body.content;
-  assert.equal(c.header[1].settings.menu[0].label,'Start');assert.equal(c.header[1].settings.menu.length,8);
-  assert.equal(c.sections.find(s=>s.type==='icon_row').hidden,true);
-  assert.deepEqual(c.sections.slice(0,3).map(s=>s.type),['hero_banner','collection_cards','icon_row']);
-  assert.equal(c.sections.at(-1).type,'rich_text');assert.equal(c.sections.at(-1).settings.body,'Hand-finished in Klang.');
-  assert.equal(c.settings.accent,'#8da68a');
-  assert.ok(document.querySelector('.theme-preview iframe').srcdoc.includes('Hand-finished in Klang.'));
+  // Template: hide and move a home section.
+  const names=[...document.querySelectorAll('.theme-tree-name')].map(n=>n.textContent);
+  const second=names[2];label('Hide '+second).click();await settle();
+  label('Move up '+second).click();await settle(700);
+  const post=fake.calls.filter(c=>c.path==='themes/preview-pages').at(-1);assert.ok(post,'unsaved edits are previewed');
+  const c=post.body.content;assert.equal(c.templates.header.sections['jack-header'].settings.logo_text,'FREE ENGRAVING');
+  assert.equal(c.templates.home.sections[c.templates.home.order[0]].disabled,true,'moved up and hidden');
+  assert.ok(document.querySelector('.theme-preview iframe').srcdoc.includes('FREE ENGRAVING'));
   find('Save').click();await settle();
-  const save=fake.calls.find(c=>c.method==='PATCH');assert.equal(save.path,'themes/1');assert.equal(save.body.revision,3);assert.equal(save.body.content.settings.accent,'#8da68a');
+  const save=fake.calls.find(x=>x.method==='PATCH');assert.equal(save.path,'themes/1');assert.equal(save.body.revision,3);assert.equal(save.body.content.templates.header.sections['jack-header'].settings.logo_text,'FREE ENGRAVING');
  }finally{ui.destroy();}
 });
 
-test('viewers can open the editor read-only and preview the saved theme',async()=>{
- const {document,find,label}=await dom(),fake=fakeApi();
+test('viewers open the editor read-only and see the saved page',async()=>{
+ const {document,find}=await dom(),fake=fakeApi();
  const ui=mountAdmin(fake.api,'viewer',()=>{});
  try{
   document.querySelector('[data-view="Website"]').click();await settle();
   assert.equal(find('Publish').disabled,true);assert.equal(find('Add theme').disabled,true);
   find('View theme').click();await settle(60);
-  label('View Header').click();await settle();
+  [...document.querySelectorAll('.theme-tree-open')][0].click();await settle();
   assert.ok([...document.querySelectorAll('.theme-form input')].every(i=>i.disabled));
   assert.equal(find('Save').disabled,true);
-  assert.ok(fake.calls.some(c=>c.path==='themes/1/preview'));assert.ok(!fake.calls.some(c=>c.path==='themes/preview'),'viewers never post previews');
+  assert.ok(fake.calls.some(c=>c.path==='themes/1/preview?page=home'));assert.ok(!fake.calls.some(c=>c.path==='themes/preview-pages'),'viewers never post previews');
+  assert.ok(document.querySelector('.theme-preview iframe').srcdoc.includes('Saved home'));
  }finally{ui.destroy();}
 });
 
@@ -117,21 +107,20 @@ test('pages stay usable when the themes service is unavailable (e.g. before migr
  }finally{ui.destroy();}
 });
 
-test('Preview opens the storefront in preview mode with the theme, including unsaved edits',async()=>{
- const {document,window,find,label}=await dom(),fake=fakeApi(),store=new Map();let opened=null;
+test('Preview opens the storefront in preview mode with every page, including unsaved edits',async()=>{
+ const {document,window,find}=await dom(),fake=fakeApi(),store=new Map();let opened=null;
  window.localStorage={setItem:(k,v)=>store.set(k,v),getItem:k=>store.get(k)??null};window.open=url=>{opened=url;return {};};
  const ui=mountAdmin(fake.api,'editor',()=>{});
  try{
   document.querySelector('[data-view="Website"]').click();await settle();
   find('Edit theme').click();await settle(60);
-  label('Edit Hero banner').click();await settle();
-  const heading=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Heading'));
-  heading.querySelector('input').value='Preview me';heading.querySelector('input').dispatchEvent(new window.Event('input'));
+  [...document.querySelectorAll('.theme-tree-open')][0].click();await settle();
+  const ann=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Fallback logo text')).querySelector('input');ann.value='Preview me';ann.dispatchEvent(new window.Event('input'));
   find('Preview').click();await settle(80);
   assert.equal(opened,'/?theme_preview=1');
   const saved=JSON.parse(store.get('jt-theme-preview'));
-  assert.equal(saved.theme.sections.find(s=>s.type==='hero_banner').settings.heading,'Preview me','unsaved edits are previewed');
-  assert.match(saved.name,/unsaved changes/);assert.ok(saved.expires>Date.now());assert.deepEqual(saved.media,{},'only Cloudinary preview URLs are handed over');
+  assert.match(saved.pages.home.header,/Preview me/,'unsaved edits are previewed');assert.ok(saved.pages.outlets&&saved.pages._frame,'every page is handed over');
+  assert.match(saved.name,/unsaved changes/);assert.ok(saved.expires>Date.now());
  }finally{ui.destroy();delete window.open;delete window.localStorage;}
 });
 

@@ -57,7 +57,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   const published=path.match(/^\/api\/v3\/storefront\/pages\/([^/]{1,100})$/);
   if(published){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicPage(db,published[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
   // Public live theme (no staff token): header, home page sections and footer of the published theme only.
-  const themePage=path.match(/^\/api\/v3\/storefront\/theme\/pages\/([a-z0-9-]{1,100})$/);
+  const themePage=path.match(/^\/api\/v3\/storefront\/theme\/pages\/([a-z0-9_-]{1,100})$/);
   if(themePage){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicThemePage(db,themePage[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
   if(path==='/api/v3/storefront/theme/scripts.js'){if(req.method!=='GET')throw new HttpError(405,'Method not available');const js=await themeScripts(url.searchParams.get('s'));res.setHeader('Content-Type','text/javascript; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300, s-maxage=3600');res.end(js);return;}
   if(path==='/api/v3/storefront/theme'){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicTheme(db);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
@@ -120,7 +120,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   let result;
   if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?await orderDetail(db,sales[2]):await listOrders(db,url.searchParams);
   else if(req.method==='GET'&&mediaImport)result=await importStatus(db);
-  else if(req.method==='GET'&&theme)result=themeAction==='preview'?await previewTheme(db,theme[2],options.cloud??cloudAdapter()):theme[2]?await themeDetail(db,theme[2]):await listThemes(db);
+  else if(req.method==='GET'&&theme)result=themeAction==='preview'?await previewTheme(db,theme[2],options.cloud??cloudAdapter(),url.searchParams.get('page')??'home'):theme[2]?await themeDetail(db,theme[2]):await listThemes(db);
   else if(req.method==='GET'&&page)result=action==='preview'?await previewPage(db,page[2],url.searchParams.get('source'),options.cloud??cloudAdapter()):page[2]?await pageDetail(db,page[2]):await listPages(db,url.searchParams);
   else if(req.method==='GET'){
    if(match[3]){const media=(await db.query("SELECT * FROM media WHERE id=$1 AND state='ready'",[match[2]])).rows[0];if(!media)throw new HttpError(404,'Verified media not found');const cloud=options.cloud??cloudAdapter();result={url:cloud.preview(media),expiresIn:300};}

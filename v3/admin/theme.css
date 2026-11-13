@@ -8,10 +8,10 @@
 @font-face{font-family:Inter;font-style:normal;font-weight:700;font-display:swap;src:url(/fonts/inter-latin-700-normal.woff2) format("woff2")}
 :root{--jt-background:#f8f4ea;--jt-text:#2b2420;--jt-heading:#292724;--jt-muted:#716b63;--jt-accent:#c38239;--jt-accent-hover:#a8702f;--jt-heading-font:"Bebas Neue",Impact,sans-serif;--jt-body-font:Inter,Arial,sans-serif}
 .jt-body{margin:0;background:var(--jt-background);color:var(--jt-text);font-family:var(--jt-body-font);line-height:1.5;-webkit-font-smoothing:antialiased;overflow-x:hidden}
-.jt-body *{box-sizing:border-box}
-.jt-body a{color:inherit;text-decoration:none}
-.jt-body img{max-width:100%;display:block}
-.jt-body :is(h1,h2,h3,h4){font-weight:400;margin:0}
+:where(.jt-body) *{box-sizing:border-box}
+:where(.jt-body) :where(a){color:inherit;text-decoration:none}
+:where(.jt-body) :where(img){max-width:100%;display:block}
+:where(.jt-body) :where(h1,h2,h3,h4){font-weight:400;margin:0}
 .jt-placeholder{display:block;width:100%;height:100%;background:linear-gradient(135deg,#ece5d8,#dcd2c1)}
 .jt-section{display:block}
 
