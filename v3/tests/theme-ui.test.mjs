@@ -66,7 +66,7 @@ test('theme editor edits header menu, sections and settings, previews unsaved ch
   menuLabel.querySelector('input').value='Start';menuLabel.querySelector('input').dispatchEvent(new window.Event('input'));
   find('Add to menu').click();await settle();
   assert.match([...document.querySelectorAll('.list-field legend')][0].textContent,/Menu · 8\/10/);
-  find('← All sections').click();await settle();
+  label('Close settings').click();await settle();
   // Template: hide, reorder and add a section; theme settings colour.
   label('Hide Icon row').click();await settle();
   label('Move up Collection cards').click();await settle();
@@ -74,7 +74,7 @@ test('theme editor edits header menu, sections and settings, previews unsaved ch
   [...document.querySelectorAll('button')].filter(b=>b.textContent==='Add section').at(-1).click();await settle();
   const body=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Text'));
   body.querySelector('textarea').value='Hand-finished in Klang.';body.querySelector('textarea').dispatchEvent(new window.Event('input'));
-  find('← All sections').click();await settle();
+  label('Close settings').click();await settle();
   find('Theme settings').click();await settle();
   const accent=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Buttons'));
   accent.querySelector('input').value='#8DA68A';accent.querySelector('input').dispatchEvent(new window.Event('input'));

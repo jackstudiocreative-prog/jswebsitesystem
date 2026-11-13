@@ -90,44 +90,64 @@ export function createThemes(h){
    try{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!current(t))return;frame.show(data);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
    catch(err){note.textContent='Preview not updated: '+err.message;}
   }
-  // Panel: section tree, one section's settings or theme settings.
-  const groups=[['header','Header',content.header],['sections','Template · Home page',content.sections],['footer','Footer',content.footer]];
+  // Panel, laid out like Shopify's editor: a compact section tree (icon, name, eye toggle, ··· menu)
+  // and, below it, the settings of the selected section or the theme settings.
+  const groups=[['header','Header','Header',content.header],['sections','Template','Template · Home page',content.sections],['footer','Footer','Footer',content.footer]];
+  const NS='http://www.w3.org/2000/svg';
+  const ICONS={header:'M3.5 4.5h13v3.5h-13z|M3.5 11h13M3.5 14.5h9',section:'M3.5 4h13v5h-13z|M3.5 11h13v5h-13z',image:'M3.5 4.5h13v11h-13z|m4 14 4.2-4.2 3 3 2-2 3.3 3.2|M7.6 8.6h.01',footer:'M3.5 12h13v3.5h-13z|M3.5 5.5h13M3.5 9h9',
+   eye:'M2.5 10s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5z|M10 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z',eyeOff:'M2.5 10s2.8-5 7.5-5 7.5 5 7.5 5-2.8 5-7.5 5-7.5-5-7.5-5z|M10 12.2a2.2 2.2 0 1 0 0-4.4 2.2 2.2 0 0 0 0 4.4z|M3.5 3.5l13 13',
+   gear:'M10 7.6a2.4 2.4 0 1 0 0 4.8 2.4 2.4 0 0 0 0-4.8z|M10 2.9v2M10 15.1v2M2.9 10h2M15.1 10h2M5 5l1.4 1.4M13.6 13.6 15 15M5 15l1.4-1.4M13.6 6.4 15 5'};
+  function icon(name){const g=document.createElementNS(NS,'svg');g.setAttribute('viewBox','0 0 20 20');g.setAttribute('aria-hidden','true');g.setAttribute('focusable','false');g.setAttribute('class','theme-icon');for(const d of ICONS[name].split('|')){const p=document.createElementNS(NS,'path');p.setAttribute('d',d);g.append(p);}return g;}
+  const hasImage=type=>sectionFields(type).some(f=>f.type==='media'||(f.type==='list'&&f.fields?.some(x=>x.type==='media')));
+  const iconFor=(group,type)=>group==='header'?'header':group==='footer'?'footer':hasImage(type)?'image':'section';
+  // "···" menu: a small popover of extra actions (move, hide, remove).
+  function moreMenu(name,items){
+   const d=el('details',undefined,'theme-more'),sum=el('summary');sum.append(el('span','⋯','theme-more-dots'),el('span',`More actions for ${name}`,'visually-hidden'));sum.setAttribute('title','More actions');
+   const menu=el('div',undefined,'theme-menu');for(const [text,fn,disabled,aria] of items){const n=button(text,fn,disabled);if(aria)n.setAttribute('aria-label',aria);menu.append(n);}
+   d.addEventListener('toggle',()=>{if(d.open)for(const o of panel.querySelectorAll('details.theme-more[open]'))if(o!==d)o.open=false;});
+   d.append(sum,menu);return d;
+  }
   function draw(){
-   panel.replaceChildren();
-   if(view.mode==='settings')return drawForm('Theme settings',THEME_SETTINGS,content.settings,null);
-   if(view.mode==='section'){const list=content[view.group],s=list.find(x=>x.id===view.id);if(s)return drawForm(sectionLabel(s.type),sectionFields(s.type),s.settings,{list,s,group:view.group});view={mode:'tree'};}
-   for(const [group,label,list] of groups){
-    panel.append(el('h2',label,'theme-group-title'));
-    const ol=el('ol',undefined,'theme-tree');panel.append(ol);
+   panel.replaceChildren();panel.classList.toggle('has-settings',view.mode!=='tree');
+   panel.append(el('h2','Home page','theme-panel-title'));
+   const tree=el('div',undefined,'theme-tree-wrap');panel.append(tree);
+   for(const [group,title,aria,list] of groups){
+    tree.append(el('h3',title,'theme-group-title'));
+    const ol=el('ol',undefined,'theme-tree');tree.append(ol);
     for(const [i,s] of list.entries()){
-     const li=el('li',undefined,'theme-tree-item'+(s.hidden?' is-hidden':'')),name=sectionLabel(s.type);
-     const open=button(name,()=>{view={mode:'section',group,id:s.id};draw();});open.classList.add('theme-tree-open');open.setAttribute('aria-label',`${readOnly?'View':'Edit'} ${name}${list.filter(x=>x.type===s.type).length>1?' '+(i+1):''}`);
-     const tools=el('div',undefined,'row-actions');
-     const b=(text,fn,disabled,aria)=>{const n=button(text,fn,disabled);n.setAttribute('aria-label',`${aria} ${name}`);tools.append(n);};
-     b(s.hidden?'Show':'Hide',()=>{s.hidden=!s.hidden;touch();draw();},readOnly,s.hidden?'Show':'Hide');
-     if(group==='sections'){
-      b('↑',()=>{[list[i-1],list[i]]=[list[i],list[i-1]];touch();draw();},readOnly||i===0,'Move up');
-      b('↓',()=>{[list[i+1],list[i]]=[list[i],list[i+1]];touch();draw();},readOnly||i===list.length-1,'Move down');
-      b('Remove',()=>{if(!confirmed(`Remove this ${name} section from the theme?`))return;list.splice(i,1);touch();draw();},readOnly,'Remove');
-     }
-     li.append(open);if(s.hidden)li.append(el('span','Hidden','badge'));li.append(tools);ol.append(li);
+     const name=sectionLabel(s.type),selected=view.mode==='section'&&view.id===s.id;
+     const li=el('li',undefined,'theme-tree-item'+(s.hidden?' is-hidden':'')+(selected?' is-selected':''));
+     const open=button('',()=>{view={mode:'section',group,id:s.id};draw();});open.classList.add('theme-tree-open');open.append(icon(iconFor(group,s.type)),el('span',name,'theme-tree-name'));
+     open.setAttribute('aria-label',`${readOnly?'View':'Edit'} ${name}${list.filter(x=>x.type===s.type).length>1?' '+(i+1):''}`);if(selected)open.setAttribute('aria-current','true');
+     const eye=button('',()=>{s.hidden=!s.hidden;touch();draw();},readOnly);eye.classList.add('theme-eye');eye.append(icon(s.hidden?'eyeOff':'eye'));eye.setAttribute('aria-label',`${s.hidden?'Show':'Hide'} ${name}`);eye.setAttribute('title',s.hidden?'Show section':'Hide section');
+     li.append(open,eye);
+     if(group==='sections'&&!readOnly)li.append(moreMenu(name,[
+      ['Move up',()=>{[list[i-1],list[i]]=[list[i],list[i-1]];touch();draw();},i===0,`Move up ${name}`],
+      ['Move down',()=>{[list[i+1],list[i]]=[list[i],list[i+1]];touch();draw();},i===list.length-1,`Move down ${name}`],
+      ['Remove section',()=>{if(!confirmed(`Remove this ${name} section from the theme?`))return;list.splice(i,1);if(selected)view={mode:'tree'};touch();draw();},false,`Remove ${name}`]]));
+     ol.append(li);
     }
     const missing=group==='sections'?TEMPLATE_TYPES:GROUPS[group].filter(type=>!list.some(s=>s.type===type));
     if(missing.length&&!readOnly&&(group!=='sections'||list.length<MAX_TEMPLATE_SECTIONS)){
-     const add=select(missing.map(type=>[type,sectionLabel(type)]),missing[0]);add.setAttribute('aria-label',`Section to add to ${label}`);
-     const row=el('div',undefined,'toolbar section-adder');row.append(add,button('Add section',()=>{const s={id:newSectionId(),type:add.value,hidden:false,settings:defaults(add.value)};list.push(s);touch();view={mode:'section',group,id:s.id};draw();}));panel.append(row);
+     const add=select(missing.map(type=>[type,sectionLabel(type)]),missing[0]);add.setAttribute('aria-label',`Section to add to ${aria}`);
+     const row=el('div',undefined,'section-adder');row.hidden=true;row.append(add,button('Add section',()=>{const s={id:newSectionId(),type:add.value,hidden:false,settings:defaults(add.value)};list.push(s);touch();view={mode:'section',group,id:s.id};draw();}));
+     const plus=button('+ Add section',()=>{row.hidden=!row.hidden;plus.setAttribute('aria-expanded',String(!row.hidden));if(!row.hidden)add.focus();});plus.classList.add('theme-add-section');plus.setAttribute('aria-expanded','false');
+     tree.append(plus,row);
     }
    }
-   const settings=button('Theme settings',()=>{view={mode:'settings'};draw();});settings.classList.add('theme-settings-open');panel.append(settings);
+   const settings=button('',()=>{view={mode:'settings'};draw();});settings.classList.add('theme-settings-open');settings.append(icon('gear'),el('span','Theme settings'));if(view.mode==='settings')settings.classList.add('is-selected');tree.append(settings);
+   if(view.mode==='settings')return drawForm('Theme settings',THEME_SETTINGS,content.settings,null,'gear');
+   if(view.mode==='section'){const list=content[view.group],s=list.find(x=>x.id===view.id);if(s)return drawForm(sectionLabel(s.type),sectionFields(s.type),s.settings,{list,s,group:view.group},iconFor(view.group,s.type));view={mode:'tree'};panel.classList.remove('has-settings');}
   }
-  function drawForm(title,fields,values,ctx){
-   const back=button('← All sections',()=>{view={mode:'tree'};draw();});back.classList.add('theme-back');
-   panel.append(back,el('h2',title,'theme-group-title'));
-   const form=el('div',undefined,'section-form theme-form');panel.append(form);
+  function drawForm(title,fields,values,ctx,iconName){
+   const card=el('div',undefined,'theme-settings-card'),head=el('div',undefined,'theme-settings-head');
+   head.append(icon(iconName),el('h2',title,'theme-form-title'));
+   if(ctx&&!readOnly)head.append(moreMenu(title,[[ctx.s.hidden?'Show section':'Hide section',()=>{ctx.s.hidden=!ctx.s.hidden;touch();draw();},false],
+    ...(ctx.group==='sections'?[['Remove section',()=>{if(!confirmed('Remove this section from the theme?'))return;ctx.list.splice(ctx.list.indexOf(ctx.s),1);touch();view={mode:'tree'};draw();},false]]:[])]));
+   const close=button('×',()=>{view={mode:'tree'};draw();});close.classList.add('theme-close');close.setAttribute('aria-label','Close settings');head.append(close);
+   const form=el('div',undefined,'section-form theme-form');card.append(head,form);panel.append(card);
    const redraw=()=>{form.replaceChildren(...fields.map(f=>control(values,f,redraw)));if(readOnly)for(const n of form.querySelectorAll('input,textarea,select,button'))n.disabled=true;};
    redraw();
-   if(ctx&&!readOnly){const tools=el('div',undefined,'actions');tools.append(button(ctx.s.hidden?'Show section':'Hide section',()=>{ctx.s.hidden=!ctx.s.hidden;touch();draw();}));
-    if(ctx.group==='sections')tools.append(button('Remove section',()=>{if(!confirmed('Remove this section from the theme?'))return;ctx.list.splice(ctx.list.indexOf(ctx.s),1);touch();view={mode:'tree'};draw();}));panel.append(tools);}
   }
   // One form control per schema field; lists nest (menu → drop-down items, footer columns → links).
   function control(v,f,redraw){
