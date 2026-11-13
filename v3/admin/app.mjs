@@ -4,20 +4,23 @@ import {authStorage,authOptions,checkResult,verifiedFactor,enrollTotp,verifyTotp
 import {captureCallback,completeCallback,setInvitePassword} from './auth-callback.mjs';
 const callback=captureCallback(location,history);
 const $=id=>document.getElementById(id),message=text=>{$('message').textContent=text;};
-let adminUI,client,factor,role,recovery=false,invitation=false,exchanging=false;
+// factor: the TOTP factor used for verification (verified, or the pending one created here).
+// enrollment: {id,qr} of the unverified factor created on this page; enrolling: in-flight request.
+let adminUI,client,factor,role,recovery=false,invitation=false,exchanging=false,enrollment=null,enrolling=null;
 async function api(path,body,method=body?'POST':'GET'){
  const {session}=checkResult(await client.auth.getSession());
  const response=await fetch('/api/v3/'+path,{method,headers:{Authorization:'Bearer '+(session?.access_token??''),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});
  const data=await response.json();if(!response.ok)throw Error(data.error);return data;
 }
 function action(id,fn){$(id).addEventListener('click',async e=>{e.preventDefault();$(id).disabled=true;try{await fn();}catch(err){message(err.message);}finally{$(id).disabled=false;}});}
+function showQr(src){if(src){$('qr').src=src;$('qr').hidden=false;}else{$('qr').removeAttribute('src');$('qr').hidden=true;}}
 async function refresh(){if(adminUI)await adminUI.reload();}
 async function workspace(){
  const staff=await api('session');role=staff.role;$('workspace').hidden=false;$('mfa').hidden=true;$('upload').disabled=role==='viewer';$('file').disabled=role==='viewer';message('Signed in as '+role);if(!adminUI)adminUI=mountAdmin(api,role,message);await refresh();
 }
 async function signedIn(){
  if(invitation||recovery)throw Error('Complete password setup first.');
- $('login').hidden=true;$('logout').hidden=false;$('mfa').hidden=false;factor=await verifiedFactor(client.auth);
+ $('login').hidden=true;$('logout').hidden=false;$('mfa').hidden=false;factor=(await verifiedFactor(client.auth))??enrollment?.id??null;
  const assurance=checkResult(await client.auth.mfa.getAuthenticatorAssuranceLevel());
  if(assurance.currentLevel==='aal2')await workspace();else message(factor?'Enter authenticator code.':'Enroll an authenticator before continuing.');
 }
@@ -29,13 +32,21 @@ try{
  client.auth.onAuthStateChange(event=>{
   // Supabase also relays other tabs' events. Only this tab's own code exchange opens recovery here.
   if(event==='PASSWORD_RECOVERY'&&!exchanging){if(!recovery)message('Password recovery is open in another tab.');return;}
-  if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';$('qr').removeAttribute('src');$('qr').hidden=true;$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
+  if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;enrollment=null;enrolling=null;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';showQr(null);$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
  $('login').onsubmit=async e=>{e.preventDefault();try{checkResult(await client.auth.signInWithPassword({email:$('email').value,password:$('password').value}));$('password').value='';await signedIn();}catch(err){message(err.message);}};
  action('reset',async()=>{checkResult(await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/admin'}));message('If eligible, a recovery email has been sent. Open the newest link in this browser.');});
  action('update-password',async()=>{if(!recovery)throw Error('Open a valid password recovery link first.');await recoverPassword(client.auth,$('new-password').value);$('new-password').value='';$('recovery').hidden=true;message('Password updated. Sign in again.');});
  action('set-invite-password',async()=>{if(!invitation)throw Error('Open a valid invitation first.');await setInvitePassword(client.auth,$('invite-password').value,$('invite-confirm').value);$('invite-password').value='';$('invite-confirm').value='';invitation=false;$('invitation').hidden=true;await signedIn();});
- action('enroll',async()=>{if(invitation||recovery)throw Error('Complete password setup first.');if(factor)throw Error('An authenticator is already selected.');const data=await enrollTotp(client.auth);factor=data.id;$('qr').src=data.qr;$('qr').hidden=false;message('Scan the QR code and enter the six-digit code.');});
- action('verify',async()=>{if(invitation||recovery)throw Error('Complete password setup first.');await verifyTotp(client.auth,factor,$('code').value);$('code').value='';$('qr').removeAttribute('src');$('qr').hidden=true;await workspace();});
+ action('enroll',async()=>{
+  if(invitation||recovery)throw Error('Complete password setup first.');
+  if(enrolling)return enrolling; // one enrollment request at a time
+  if(enrollment){showQr(enrollment.qr);message('Scan the QR code and enter the six-digit code.');return;} // reuse the pending factor
+  if(factor)throw Error('An authenticator is already set up. Enter its code instead.');
+  enrolling=enrollTotp(client.auth);
+  try{enrollment=await enrolling;}finally{enrolling=null;}
+  factor=enrollment.id;showQr(enrollment.qr);message('Scan the QR code and enter the six-digit code.');
+ });
+ action('verify',async()=>{if(invitation||recovery)throw Error('Complete password setup first.');await verifyTotp(client.auth,factor,$('code').value);enrollment=null;$('code').value='';showQr(null);await workspace();});
  action('logout',async()=>{checkResult(await client.auth.signOut());message('Signed out.');});
  action('refresh',refresh);
  action('upload',async()=>{
