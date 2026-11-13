@@ -1,5 +1,16 @@
 // Public page shell: shows only published content from the read-only storefront API.
 import {renderPage} from '../admin/page-render.mjs';
+import {renderThemeHeader,renderThemeFooter} from '../admin/theme-render.mjs';
+import {activateTheme,liveTheme} from './theme-behaviour.mjs';
+// With a live Online Store theme, its header and footer replace the plain staging header and footer.
+liveTheme().then(theme=>{
+ if(!theme)return;
+ const header=document.querySelector('body>header'),footer=document.querySelector('body>footer');
+ const top=document.createElement('div'),bottom=document.createElement('div');
+ top.innerHTML=renderThemeHeader(theme,{});bottom.innerHTML=renderThemeFooter(theme,{});
+ header?.replaceWith(top);footer?.replaceWith(bottom);document.body.classList.add('jt-body');
+ activateTheme(document.body,theme.settings);
+});
 const root=document.getElementById('page-root');
 const message=text=>{root.innerHTML='';const s=document.createElement('section');s.className='store-section';const d=document.createElement('div');d.className='js-rich js-align-center';const h=document.createElement('h1');h.textContent=text;d.append(h);s.append(d);root.append(s);};
 const slug=location.pathname.match(/^\/pages\/([a-z0-9]+(?:-[a-z0-9]+)*)\/?$/)?.[1];

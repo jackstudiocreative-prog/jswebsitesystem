@@ -141,3 +141,6 @@ export async function publicPage(db,slug){
  if(redirect)return {redirect_to:redirect.slug};
  throw new HttpError(404,'Page not found');
 }
+
+// Shared with the Online Store themes (src/themes.mjs) so page sections inside a theme render identically.
+export {resolve as resolvePageSections};
