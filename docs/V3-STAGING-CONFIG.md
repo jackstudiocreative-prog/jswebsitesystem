@@ -108,12 +108,29 @@ isolated database first; no destructive down migration is provided.
 
 ## MFA QR correction
 
-The SDK-provided SVG data URL is validated and assigned unchanged to the image src. A second
-prefix is never added. Tests cover raw/percent-encoded SDK URLs, malformed/nested URLs, enrollment
-errors, challenge and verification sequencing, aal2 enforcement, existing factors, recovery and
-logout cleanup. A DOM-event harness executes the actual admin module with a mocked provider to
-check the displayed src and workspace access. This is not a live browser/Supabase MFA or email test.
-Hosted authenticator scanning and same-tab PKCE recovery remain first-Staging acceptance checks.
+Supabase Auth generates the TOTP QR with SVGo, so `totp.qr_code` is SVG markup that starts with
+an XML declaration and a comment before `<svg>`; supabase-js prefixes it, unencoded, with
+`data:image/svg+xml;utf-8,`. The earlier validator only accepted markup beginning with `<svg>`,
+so it threw after Supabase had already created the factor: no QR was shown, the factor ID was
+lost, the factor stayed `unverified`, and every retry failed with "A factor with the friendly name
+"Jack Studio Staff" for this user already exists".
+
+Now (`admin/auth-client.mjs`, `admin/app.mjs`):
+- The QR is read from `data.totp.qr_code`, the SVG is validated (XML declaration and comments
+  allowed) and re-encoded once as `data:image/svg+xml;charset=utf-8,<percent-encoded SVG>` for the
+  `<img>` src, so characters such as `#` or `%` cannot break it. No second prefix is added.
+- The new factor ID is kept in the page's enrollment state and used for challenge/verify. A
+  wrong code keeps the QR on screen; success clears the state.
+- Only one enrollment request runs at a time; clicking "Set up authenticator" again while a
+  setup is pending shows the same QR instead of creating another factor.
+- Before enrolling, abandoned unverified TOTP factors are removed (supabase-js lists them only
+  in `listFactors().all`; `.totp` holds verified factors), so the friendly name cannot conflict.
+  Verified factors are never removed; with one present, enrollment is refused.
+- If the QR cannot be rendered, the just-created factor is removed instead of left behind.
+
+Tests use the real SVGo-shaped response; they fail against the previous code. Unit and DOM-harness
+tests plus a headless-Chrome render of the generated data URL pass. This is still not a live
+Supabase MFA test: scanning with an authenticator app on Staging remains an acceptance check.
 
 ## Password recovery (PKCE, cross-tab)
 
