@@ -12,11 +12,17 @@ from PIL import Image
 src = pathlib.Path(sys.argv[1]); dst = pathlib.Path(__file__).resolve().parent.parent / 'showroom'
 if dst.exists(): shutil.rmtree(dst)
 (dst / 'assets').mkdir(parents=True)
-shutil.copy(src / 'style.css', dst / 'style.css')
+(dst / 'style.css').write_text((src / 'style.css').read_text() + '\n#world{touch-action:none}\n')
 # Pause hook: the home page stops the render loop while the showroom is scrolled out of view
 # (same-site frames are not throttled by the browser, so a running loop would slow the page).
 loop = "if(now-lastOverlay>45){updateOverlay();lastOverlay=now}requestAnimationFrame(render)}"
 app = (src / 'app.js').read_text(); assert app.count(loop) == 1
+# Embedded in the home page: drags must turn the view, never scroll the page around it. Touch moves on
+# the 3D view are cancelled (iOS ignores touch-action inside frames), and a sideways trackpad swipe turns
+# the view; an up/down swipe or mouse wheel still scrolls the page so visitors can move past the showroom.
+cancel = "canvas.addEventListener('pointercancel',()=>{mouseDown=null;canvas.classList.remove('dragging')});"
+assert app.count(cancel) == 1
+app = app.replace(cancel, cancel + "canvas.addEventListener('touchmove',e=>e.preventDefault(),{passive:false});canvas.addEventListener('wheel',e=>{if(e.ctrlKey||Math.abs(e.deltaX)<=Math.abs(e.deltaY))return;e.preventDefault();cam.yaw-=e.deltaX*.0042;if(tour)stopAuto()},{passive:false});")
 (dst / 'app.js').write_text(app.replace(loop, "if(now-lastOverlay>45){updateOverlay();lastOverlay=now}if(window.vsPaused){window.vsResume=()=>{window.vsResume=null;last=performance.now();requestAnimationFrame(render)};return}requestAnimationFrame(render)}"))
 for photo in (src / 'assets').glob('*.jpg'):  # reference photos for "View reference"
     if photo.name not in ('showroom_atlas.jpg', 'showroom-cover.jpg'): shutil.copy(photo, dst / 'assets' / photo.name)
