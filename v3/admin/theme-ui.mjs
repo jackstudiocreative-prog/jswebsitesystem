@@ -29,6 +29,8 @@ export function createThemes(h){
   await api(`themes/${theme.id}/publish`,{revision:theme.revision},'POST');notify(`${theme.name} is now live.`);await navigate('Website');
  }
 
+ // Fills empty image slots with the matching imported Shopify images; staff-chosen images stay.
+ async function autofill(theme){const r=await api(`themes/${theme.id}/autofill`,{revision:theme.revision},'POST');notify(r.filled?`${theme.name}: filled ${r.filled} image slot${r.filled===1?'':'s'} from the Shopify images.`:'No empty image slots to fill. Import the Shopify images in the Media Library first, or the slots already have images.');await navigate('Website');}
  // Online Store overview: current theme and theme library. Pages follow below (website-ui.mjs).
  async function overview(t){
   let data;
@@ -44,7 +46,7 @@ export function createThemes(h){
    info.append(el('h3',live.name),el('p',`Last saved ${when(live.updated_at)}`,'muted'),el('p',`Published ${when(live.published_at)}`,'muted'));
    const actions=el('div',undefined,'actions'),edit=button(readOnly?'View theme':'Edit theme',()=>editTheme(live.id));edit.classList.add('primary');
    const view=el('a','View store','button-link');view.href='/';view.target='_blank';view.rel='noopener';
-   actions.append(edit,view,button('Duplicate',()=>duplicate(live),readOnly||data.items.length>=max),button('Rename',()=>rename(live),readOnly));info.append(actions);
+   actions.append(edit,view,button('Duplicate',()=>duplicate(live),readOnly||data.items.length>=max),button('Rename',()=>rename(live),readOnly),button('Auto-fill images',()=>autofill(live),readOnly));info.append(actions);
    grid.append(frame.stage,info);cur.append(grid);
    api(`themes/${live.id}/preview`).then(p=>{if(current(t))frame.show(p);}).catch(err=>{frame.stage.replaceWith(el('p','Preview unavailable: '+err.message,'muted'));});
   }
@@ -54,7 +56,7 @@ export function createThemes(h){
   for(const theme of library){
    const row=el('div',undefined,'theme-row'),copy=el('div');copy.append(el('strong',theme.name),el('span',`Last saved ${when(theme.updated_at)}`,'muted'));
    const tools=el('div',undefined,'row-actions'),pub=button('Publish',()=>publish(theme),readOnly);pub.classList.add('primary');
-   tools.append(pub,button(readOnly?'View':'Edit theme',()=>editTheme(theme.id)),button('Duplicate',()=>duplicate(theme),readOnly||data.items.length>=max),button('Rename',()=>rename(theme),readOnly),
+   tools.append(pub,button(readOnly?'View':'Edit theme',()=>editTheme(theme.id)),button('Duplicate',()=>duplicate(theme),readOnly||data.items.length>=max),button('Rename',()=>rename(theme),readOnly),button('Auto-fill images',()=>autofill(theme),readOnly),
     button('Remove',async()=>{if(!confirmed(`Remove "${theme.name}" from the theme library?`))return;await api(`themes/${theme.id}/archive`,{revision:theme.revision},'POST');notify('Theme removed.');await navigate('Website');},readOnly));
    row.append(copy,tools);lib.append(row);
   }

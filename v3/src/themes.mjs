@@ -2,6 +2,7 @@ import {normalizeTheme,themeReferences,PRESETS} from '../shared/theme-schema.mjs
 import {SECTION_TYPES} from '../shared/page-schema.mjs';
 import {resolvePageSections} from './pages.mjs';
 import {HttpError} from './auth.mjs';
+import {autofillThemeImages} from './shopify-import.mjs';
 // Online Store themes. One theme can be live; the rest are the theme library. As in Shopify, saving
 // the live theme changes the storefront immediately; staff duplicate it to work on a private copy.
 // Writes lock the row and check an integer revision so two editors cannot overwrite each other.
@@ -44,7 +45,8 @@ export async function createTheme(db,input,actor){
  let preset,body,fallback;
  if(input.from!=null){const source=await themeDetail(db,input.from);preset=source.preset;body=source.content;fallback=`Copy of ${source.name}`.slice(0,60);}
  else{const p=PRESETS[input.preset];if(!p)bad('Unknown theme preset');preset=input.preset;body=p.build();fallback=p.label;}
- const clean=content(body);await checkReferences(db,clean);
+ // New preset themes pick up the matching Shopify images automatically once they are imported.
+ const clean=content(body);if(input.from==null)await autofillThemeImages(db,clean);await checkReferences(db,clean);
  const theme=(await db.query('INSERT INTO themes(name,preset,content,updated_by) VALUES ($1,$2,$3,$4) RETURNING *',[name(input.name??fallback),preset,JSON.stringify(clean),actor])).rows[0];
  await audit(db,actor,input.from!=null?'duplicate':'create',theme.id);return shape(theme);
 }
@@ -53,6 +55,15 @@ export async function saveTheme(db,id,input,actor){
  const next=input.content!==undefined?content(input.content):theme.content;if(input.content!==undefined)await checkReferences(db,next);
  const saved=(await db.query('UPDATE themes SET name=$1,content=$2,revision=revision+1,updated_at=now(),updated_by=$3 WHERE id=$4 RETURNING *',[input.name!==undefined?name(input.name):theme.name,JSON.stringify(next),actor,theme.id])).rows[0];
  await audit(db,actor,'update',theme.id);return shape(saved);
+}
+// "Auto-fill images": puts imported Shopify images into empty image slots of a saved theme.
+export async function autofillTheme(db,id,input,actor){
+ object(input,['revision']);const theme=await locked(db,id,input.revision);
+ const next=content(theme.content),filled=await autofillThemeImages(db,next);
+ if(!filled)return {...shape(theme),filled};
+ await checkReferences(db,next);
+ const saved=(await db.query('UPDATE themes SET content=$1,revision=revision+1,updated_at=now(),updated_by=$2 WHERE id=$3 RETURNING *',[JSON.stringify(next),actor,theme.id])).rows[0];
+ await audit(db,actor,'autofill',theme.id);return {...shape(saved),filled};
 }
 // Makes this theme the storefront; the previous live theme returns to the library unchanged.
 export async function publishTheme(db,id,input,actor){
