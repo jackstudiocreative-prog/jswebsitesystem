@@ -10,6 +10,31 @@ export function mountAdmin(api,role,notify){
  const readOnly=role==='viewer';
  const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const button=(text,fn,disabled=false)=>{const n=el('button',text);n.type='button';n.disabled=disabled;n.addEventListener('click',async()=>{n.disabled=true;try{await fn();}catch(e){notify(e.message);}finally{n.disabled=disabled;}});return n;};
+ // Shopify image import. Runs in small batches while this tab stays open (also on other views);
+ // finished images are skipped on re-runs, so stopping and starting again is safe.
+ const importer={running:false,stop:false,done:0,total:0,failed:[],line:null};
+ const importLine=()=>{const i=importer;return i.running?`Importing… ${i.done}/${i.total} Shopify images in the library${i.failed.length?` · ${i.failed.length} failed`:''}`:`${i.done}/${i.total} Shopify images in the library${i.failed.length?` · ${i.failed.length} could not be imported`:''}`;};
+ async function runImport(){
+  const i=importer;if(i.running)return;i.running=true;i.stop=false;i.failed=[];
+  try{
+   const s=await api('media/import');i.done=s.imported;i.total=s.total;
+   for(let at=0;at<s.pending.length&&!i.stop;at+=s.batch){
+    const r=await api('media/import',{paths:s.pending.slice(at,at+s.batch)},'POST');
+    for(const item of r.items){if(item.status==='failed')i.failed.push(item);else i.done++;}
+    if(i.line?.isConnected)i.line.textContent=importLine();
+   }
+   notify(i.stop?'Shopify import paused. Start it again to continue.':i.failed.length?`Shopify import finished. ${i.failed.length} images could not be imported (see the list in the Media Library).`:'Shopify import finished. All images are in the Media Library.');
+  }finally{i.running=false;if(view==='Media Library')navigate('Media Library');}
+ }
+ function importCard(){
+  const box=el('section',undefined,'card shopify-import');box.append(el('h2','Import from Shopify'),el('p','Copies the Shopify image library (product, collection and theme images) into this private media library. Theme image slots fill automatically from these images.','muted'));
+  importer.line=el('p',importer.total?importLine():'Checking what is left to import…','shopify-import-status');importer.line.setAttribute('role','status');box.append(importer.line);
+  const stop=button('Pause',()=>{importer.stop=true;stop.textContent='Pausing…';},true);stop.disabled=readOnly||!importer.running;
+  const start=button(importer.running?'Importing…':'Import from Shopify',async()=>{const run=runImport();start.textContent='Importing…';stop.disabled=false;importer.line.textContent=importLine();await run;},readOnly||importer.running);start.classList.add('primary');const actions=el('div',undefined,'actions');actions.append(start,stop);box.append(actions);
+  if(!importer.running)api('media/import').then(s=>{importer.done=s.imported;importer.total=s.total;if(importer.line.isConnected)importer.line.textContent=importLine();if(!s.pending.length){start.textContent='All Shopify images imported';start.disabled=true;}}).catch(e=>{importer.line.textContent='Import status unavailable: '+e.message;});
+  if(importer.failed.length){const d=el('details');d.append(el('summary',`${importer.failed.length} images could not be imported`));const ul=el('ul');for(const f of importer.failed.slice(0,50))ul.append(el('li',`${f.path.split('/').pop()} — ${f.error}`));d.append(ul);box.append(d);}
+  return box;
+ }
  const field=(label,value='',type='text')=>{const wrap=el('label',label),input=el(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.value=value??'';wrap.append(input);return {wrap,input};};
  const select=(values,current)=>{const n=el('select');for(const [value,label] of values){const o=el('option',label);o.value=value;n.append(o);}n.value=current;return n;};
  const all=async resource=>{let rows=[],n=0;do{const page=await api(`${resource}?paged=true&limit=100&offset=${n}`);rows.push(...page.items);n+=page.items.length;if(n>=page.total||!page.items.length)return rows;}while(true);};
@@ -220,6 +245,7 @@ export function mountAdmin(api,role,notify){
   const tools=el('form',undefined,'toolbar'),q=field('Search',search,'search'),filter=select([['','All statuses'],...(resource==='media'?['ready','pending']:['draft','active',...(resource==='products'?['archived']:[])]).map(x=>[x,x])],status);filter.setAttribute('aria-label','Filter by status');const find=el('button','Apply filters');tools.append(q.wrap,filter,find);root.append(tools);tools.addEventListener('submit',e=>{e.preventDefault();search=q.input.value;status=filter.value;offset=0;render().catch(e=>notify(e.message));});
   if(resource==='products'){const collections=await all('collections');if(ticket!==generation)return;const choose=select([['','All collections'],...collections.map(c=>[String(c.id),c.title])],collection);choose.setAttribute('aria-label','Filter by collection');tools.insertBefore(choose,find);choose.addEventListener('change',()=>{collection=choose.value;});}
   if(resource!=='media')tools.append(button('Add '+(resource==='products'?'product':'collection'),()=>resource==='products'?editProduct():editCollection(),readOnly));
+  if(resource==='media')root.append(importCard());
   root.append(el('p',`${data.total} records · Showing ${data.items.length?offset+1:0}–${offset+data.items.length}`,'muted'));
   if(!data.items.length)empty(search||status?'No matching records. Adjust your filters.':'Your collection starts here. Add your first record.');
   else if(resource==='media'){const grid=el('div',undefined,'media-grid');root.append(grid);for(const m of data.items){const box=el('article',undefined,'card media-card');box.append(el('strong',m.label||m.object_key.split('/').pop(),'media-label'),el('p',m.object_key),el('small',`${m.width??'?'} × ${m.height??'?'} · ${m.bytes} bytes · ${m.state}`));if(m.state==='ready')box.append(button('Load private preview',async()=>{await preview(m,box);}));grid.append(box);}root.append(el('p','Private previews expire after five minutes. Link images from the product editor.','muted'));}
@@ -229,5 +255,5 @@ export function mountAdmin(api,role,notify){
  async function navigate(next,keep=false){if(!keep&&next==='Orders')sales?.resetOrders();if(dirty&&!window.confirm('Discard unsaved edits?'))return;dirty=false;view=next;offset=0;search='';status='';collection='';inventoryFilter='';for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');}for(const g of document.querySelectorAll('.nav-group'))g.classList.toggle('open',!!g.querySelector('[data-view].active'));await render();}
  const navigation=[...document.querySelectorAll('[data-view]')].map(b=>{const fn=()=>navigate(b.dataset.view).catch(e=>notify(e.message));b.addEventListener('click',fn);return [b,fn];});
  const unload=e=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
- return {reload:()=>navigate(view),destroy(){for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};
+ return {reload:()=>navigate(view),destroy(){importer.stop=true;for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};
 }

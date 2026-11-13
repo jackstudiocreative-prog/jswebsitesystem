@@ -85,3 +85,27 @@ Private (staff JWT, MFA aal2; writes need Admin/Editor): `GET|POST /api/v3/theme
 and CSP-safe output), `tests/theme-ui.test.mjs` (Online Store and editor on the real admin markup, viewer
 read-only, themes unavailable), `e2e/themes.spec.mjs` (add → edit → save → publish → storefront home,
 drop-down menu, tabs, mobile drawer, axe and CSP checks).
+
+## Shopify images and auto-fill
+
+Media Library → **Import from Shopify** copies the Shopify image library into the private Cloudinary
+media library, four images per request, while the admin tab stays open. The list is the committed
+manifest `v3/src/shopify-media.mjs` (1,987 images: every product image from the products export plus
+every collection, theme and content image the Shopify site uses). The endpoint only accepts paths from
+that manifest, so it cannot be used to fetch arbitrary URLs.
+
+- `GET /api/v3/media/import` — total, imported count and the paths still pending (viewers allowed).
+- `POST /api/v3/media/import {paths:[…up to 4]}` — editors only. Cloudinary downloads each file from
+  `cdn.shopify.com` with a signed server-side upload (`type: authenticated`, `overwrite: false`, the
+  same upload preset), the reply is checked with `validateAsset`, and a ready `media` row is added with
+  the Shopify file name as its label. Each path has a fixed public ID
+  (`jackstudio-websitesystem/shopify/<sha256>`), so re-runs skip finished images; failed images stay
+  pending and are listed in the Media Library. No migration is needed.
+
+Theme auto-fill uses the same fixed IDs. `THEME_IMAGES` in `v3/src/shopify-import.mjs` lists the image
+jackstudio.com.my uses in each slot (logos, hero, the seven collection cards, corporate and statistic
+images, story image, About Us menu tiles, outlet photos). New themes from the Jack Studio 2026 preset
+fill automatically; **Auto-fill images** on a theme (`POST /api/v3/themes/:id/autofill {revision}`)
+fills empty slots of an existing theme. Images staff picked themselves are never replaced; duplicates
+stay exact copies. The virtual-showroom cover was a Shopify theme asset, not a library file, so upload
+it in the Media Library and pick it in the theme editor.

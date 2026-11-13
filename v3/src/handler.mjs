@@ -1,9 +1,10 @@
 import { cloudAdapter,signUpload,finalizeUpload,previews } from './media.mjs';
+import { importStatus,importShopify } from './shopify-import.mjs';
 import { authorize,HttpError } from './auth.mjs';
 import { list,save,detail,dashboard } from './catalog.mjs';
 import { adjust,inventoryList,adjustmentList } from './inventory.mjs';
 import { listPages,pageDetail,createPage,savePage,publishPage,unpublishPage,restoreRevision,previewPage,previewDraft,publicPage } from './pages.mjs';
-import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,previewTheme,previewThemeDraft,publicTheme } from './themes.mjs';
+import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,autofillTheme,previewTheme,previewThemeDraft,publicTheme } from './themes.mjs';
 import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates,storefrontProduct } from './commerce.mjs';
 import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
@@ -95,12 +96,15 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   // page[1]: unsaved preview; page[2]: page id; page[3]: action; page[4]: version id.
   const action=page?.[1]?'draft-preview':page?.[3]?.startsWith('revisions/')?'restore':page?.[3];
   if(page&&!(action==='draft-preview'?['POST']:!page[2]?['GET','POST']:!action?['GET','PATCH']:action==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
-  const theme=path.match(/^\/api\/v3\/themes(?:\/(preview)|\/([1-9]\d{0,17})(?:\/(preview|publish|archive))?)?$/);
+  const theme=path.match(/^\/api\/v3\/themes(?:\/(preview)|\/([1-9]\d{0,17})(?:\/(preview|publish|archive|autofill))?)?$/);
   // theme[1]: unsaved preview; theme[2]: theme id; theme[3]: action.
   const themeAction=theme?.[1]?'draft-preview':theme?.[3];
   if(theme&&!(themeAction==='draft-preview'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
-  const match=page||sales||theme?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
-  if(!match&&!page&&!sales&&!theme)throw new HttpError(404,'Not found');
+  // Shopify image import: GET lists what is still to import, POST imports one small batch.
+  const mediaImport=path==='/api/v3/media/import';
+  if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
+  const match=page||sales||theme||mediaImport?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
+  if(!match&&!page&&!sales&&!theme&&!mediaImport)throw new HttpError(404,'Not found');
   if(match){
   if((['media/previews','inventory'].includes(match[1])&&(req.method!=='GET'||match[2]))||(match[1]==='inventory/adjustments'&&(!['GET','POST'].includes(req.method)||match[2])))throw new HttpError(405,'Method not available');
   if(!['GET','POST','PATCH'].includes(req.method) || (['media','session','dashboard'].includes(match[1])&&req.method!=='GET') || (match[1].startsWith('uploads/')&&(req.method!=='POST'||match[2])) || (req.method==='PATCH'&&!match[2]) || (req.method==='POST'&&match[2]) || (match[2]&&['session','dashboard'].includes(match[1])) || (match[3]&&match[1]!=='media') || (match[1]==='media'&&match[2]&&!match[3]))throw new HttpError(405,'Method not available');
@@ -112,6 +116,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   const staff=await authorize(db,claims,req.method!=='GET');
   let result;
   if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?await orderDetail(db,sales[2]):await listOrders(db,url.searchParams);
+  else if(req.method==='GET'&&mediaImport)result=await importStatus(db);
   else if(req.method==='GET'&&theme)result=themeAction==='preview'?await previewTheme(db,theme[2],options.cloud??cloudAdapter()):theme[2]?await themeDetail(db,theme[2]):await listThemes(db);
   else if(req.method==='GET'&&page)result=action==='preview'?await previewPage(db,page[2],url.searchParams.get('source'),options.cloud??cloudAdapter()):page[2]?await pageDetail(db,page[2]):await listPages(db,url.searchParams);
   else if(req.method==='GET'){
@@ -125,7 +130,8 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
    if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
-   else if(theme){result=themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'?200:201;}
+   else if(theme){result=themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'?200:201;}
+   else if(mediaImport)result=await importShopify(db,claims.sub,input,options.cloud??cloudAdapter());
    else if(page){result=action==='draft-preview'?await previewDraft(db,input,options.cloud??cloudAdapter()):!page[2]?await createPage(db,input,claims.sub):!action?await savePage(db,page[2],input,claims.sub):action==='publish'?await publishPage(db,page[2],input,claims.sub):action==='unpublish'?await unpublishPage(db,page[2],input,claims.sub):await restoreRevision(db,page[2],page[4],input,claims.sub);res.statusCode=page[2]||action==='draft-preview'?200:201;}
    else{
    const cloud=match[1].startsWith('uploads/')?(options.cloud??cloudAdapter()):null;
