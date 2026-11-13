@@ -13,6 +13,8 @@ const render={
  banner:s=>`<section class="js-banner js-theme-${s.theme}"><div class="store-section-inner"><p>${esc(s.text)}</p>${button(s,'store-button js-banner-button')}</div></section>`,
  rich_text:s=>`<section class="store-section"><div class="js-rich js-align-${s.align}">${s.heading?`<h1>${esc(s.heading)}</h1>`:''}${paragraphs(s.body)}</div></section>`
 };
+// One page section (used inside Online Store themes, which mix theme and page sections).
+export function renderPageSection(s,media={}){return render[s.type]?`<div data-section="${esc(s.id)}">${render[s.type](s.settings,media,s)}</div>`:'';}
 export function renderPage(page,media={}){
  const sections=(page.sections??[]).filter(s=>!s.hidden&&render[s.type]);
  if(!sections.length)return '<main class="js-page"><section class="store-section"><div class="js-rich js-align-center"><p class="js-empty">This page has no visible sections yet.</p></div></section></main>';

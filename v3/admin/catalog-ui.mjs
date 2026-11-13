@@ -1,5 +1,6 @@
 // DOM text APIs deliberately avoid interpolating catalogue content as HTML.
 import {createWebsite} from './website-ui.mjs';
+import {createThemes} from './theme-ui.mjs';
 import {moneyToMinor,formatPrice} from './money.mjs';
 import {createOrders} from './orders-ui.mjs';
 export {moneyToMinor,formatPrice};
@@ -202,6 +203,7 @@ export function mountAdmin(api,role,notify){
   }
  }
  const website=createWebsite({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,all,thumb,previews,mediaPicker,navigate,setDirty:v=>{dirty=v;},ticket:()=>++generation,current:t=>t===generation});
+ const themes=createThemes({api,root,notify,readOnly,el,button,field,select,header,empty,all,thumb,previews,mediaPicker,navigate,setDirty:v=>{dirty=v;},ticket:()=>++generation,current:t=>t===generation});
  const sales=createOrders({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,navigate:v=>navigate(v,true),ticket:()=>++generation,current:t=>t===generation});
  async function render(){
   const ticket=++generation;upload.hidden=view!=='Media Library';header(view,readOnly?'Viewer access · Read only':'Staging workspace · Changes persist in the shared database');
@@ -210,7 +212,8 @@ export function mountAdmin(api,role,notify){
   if(view==='Settings'){await sales.settings(ticket);return;}
   if(view==='Dashboard'){const d=await api('dashboard');if(ticket!==generation)return;const grid=el('div',undefined,'metrics');for(const [label,key]of [['All products','products'],['Active products','active'],['Draft products','drafts'],['Collections','collections'],['Ready images','media'],['Active variants','variants'],['Low stock','low_stock'],['Out of stock','out_of_stock'],['Paid orders','paid_orders'],['Revenue (paid, net of refunds)','revenue_minor'],['Awaiting payment','pending_orders'],['To fulfil','to_fulfil'],['Needs attention','attention_orders'],['Emails waiting to send','emails_waiting'],['Published pages','published_pages'],['Pages with drafts','draft_pages']]){const card=el('div',undefined,'card'+((key==='low_stock'||key==='out_of_stock'||key==='attention_orders')&&d[key]?' metric-alert':''));card.append(el('span',label,'muted'),el('strong',key==='revenue_minor'?formatPrice(Number(d[key]??0)).replace(/\u00a0/g,' '):String(d[key]??0),key==='revenue_minor'?'metric-money':undefined));grid.append(card);}root.append(grid);const welcome=el('section',undefined,'card welcome');welcome.append(el('p','BUILD YOUR COLLECTION','eyebrow'),el('h2','Made for the everyday. Managed with care.'),el('p','Manage your catalogue, organize collections and prepare your imagery. Orders are paid through eGHL; revenue counts paid orders net of refunds.'),button('Manage products',()=>navigate('Products')),button('Review orders',()=>navigate('Orders')),button('Review inventory',()=>navigate('Inventory')),button('Edit website',()=>navigate('Website')),button('Open media library',()=>navigate('Media Library')));root.append(welcome);return;}
   if(view==='Inventory'){await inventoryView(ticket);return;}
-  if(view==='Website'){await website.list(ticket);return;}
+  // Online Store: current theme and theme library, then the pages list.
+  if(view==='Website'){await themes.overview(ticket);if(ticket!==generation)return;root.append(el('h2','Pages','website-pages-title'));await website.list(ticket);return;}
   const resource=view==='Products'?'products':view==='Collections'?'collections':'media';
   const params=new URLSearchParams({paged:'true',limit:'25',offset:String(offset),q:search});if(status)params.set('status',status);if(collection&&resource==='products')params.set('collection',collection);
   const data=await api(resource+'?'+params);if(ticket!==generation)return;

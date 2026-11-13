@@ -17,6 +17,7 @@ has been run on the hosted database. main, Production, Shopify and the live webs
 | #9 | Website Editor (sections, preview, publish, versions) | 006 |
 | #10 | Checkout, eGHL payments, orders, Shopify shipping rules | 007 |
 | #11 | Abuse protection, SEO, order email outbox, E2E, CSP | 008 |
+| (this PR) | Online Store themes: theme library, theme editor, Jack Studio 2026 preset ([V3-THEMES.md](V3-THEMES.md)) | 009 |
 
 After each merge, retarget the next PR to `staging`. Merging into `staging` can trigger a Vercel Preview.
 **Apply the matching migration before the app version that needs it** (operator account, never runtime).

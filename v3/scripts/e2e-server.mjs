@@ -26,14 +26,15 @@ await db.query('SET ROLE jackstudio_api');
 const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.repeat(10),actionUrl:`http://127.0.0.1:${port}/pay/mock`,baseUrl:'https://e2e.test'});
 const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id}});
 const adminJs=(await build({entryPoints:[fileURLToPath(new URL('e2e/admin-entry.mjs',root))],bundle:true,format:'esm',write:false})).outputFiles[0].text;
-const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json'};
+const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.woff2':'font/woff2'};
 createServer(async(req,res)=>{
  const path=new URL(req.url,'http://x').pathname;
  for(const [re,list] of headers)if(re.test(path))for(const h of list)res.setHeader(h.key,h.value);
  let target=path;for(const [re,dest] of rewrites)if(re.test(path)){target=dest;break;}
  if(target==='/api/index')return api(req,res);
  if(target==='/admin.js'){res.setHeader('Content-Type','text/javascript');return res.end(adminJs);}
- try{const file=await readFile(new URL('public'+(target.endsWith('/')?target+'index.html':target),root));res.setHeader('Content-Type',types[target.slice(target.lastIndexOf('.'))]??'application/octet-stream');res.end(file);}
+ const name=target.endsWith('/')?target+'index.html':target; // "/" is the storefront home
+ try{const file=await readFile(new URL('public'+name,root));res.setHeader('Content-Type',types[name.slice(name.lastIndexOf('.'))]??'application/octet-stream');res.end(file);}
  catch{res.statusCode=404;res.end('Not found');}
 }).listen(port,'127.0.0.1',async()=>{
  if(!demo)return console.log('e2e harness on',port);
@@ -46,6 +47,10 @@ createServer(async(req,res)=>{
  const {TEMPLATES}=await import('../shared/page-schema.mjs');
  const home=await call('pages',TEMPLATES.home.build());await call(`pages/${home.id}/publish`,{revision:home.revision});
  await call('pages',TEMPLATES['brand-story'].build());
+ // Online Store: the Jack Studio 2026 theme, live, with its Best Seller tabs pointed at the sample collections.
+ const theme=await call('themes',{preset:'jack-studio-2026'}),content=(await call('themes/'+theme.id,undefined,'GET')).content;
+ const tabs=content.sections.find(x=>x.type==='product_tabs').settings.tabs;tabs[0].collection_id=String(wallets.id);tabs[3].collection_id=String(travel.id);
+ const saved=await call('themes/'+theme.id,{revision:theme.revision,content},'PATCH');await call(`themes/${theme.id}/publish`,{revision:saved.revision});
  const b=`http://127.0.0.1:${port}`;
- console.log(`\nJack Studio V3 — local simulation (in-memory data, resets when stopped; mock eGHL, no real money)\n\n  Staff workspace (editor): ${b}/admin\n  Staff workspace (viewer): ${b}/admin?role=viewer\n  Website home:             ${b}/pages/home\n  Product page:             ${b}/products/card-holder\n  Bag:                      ${b}/cart\n\nPress Ctrl+C to stop.\n`);
+ console.log(`\nJack Studio V3 — local simulation (in-memory data, resets when stopped; mock eGHL, no real money)\n\n  Staff workspace (editor): ${b}/admin\n  Staff workspace (viewer): ${b}/admin?role=viewer\n  Storefront (live theme):  ${b}/\n  Website home:             ${b}/pages/home\n  Product page:             ${b}/products/card-holder\n  Bag:                      ${b}/cart\n\nPress Ctrl+C to stop.\n`);
 });
