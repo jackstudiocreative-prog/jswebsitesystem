@@ -49,3 +49,19 @@ test('viewers see import progress but cannot start it; themes offer "Auto-fill i
   assert.match(messages.at(-1),/filled 12 image slots/);
  }finally{ui.destroy();}
 });
+
+test('Media Library shows image thumbnails automatically, one preview request per page',async()=>{
+ const {document}=await dom(),calls=[];
+ const api=async path=>{calls.push(path);
+  if(path==='media/import')return {total:2,imported:2,pending:[],batch:4};
+  if(path.startsWith('media/previews'))return {items:[{id:'1',url:'https://api.cloudinary.com/a.png'},{id:'2',url:'https://evil.example/b.png'}]};
+  if(path.startsWith('media?'))return {items:[{id:1,label:'JACK_STUDIO.png',object_key:'k/1',width:1600,height:900,bytes:2400000,state:'ready'},{id:2,label:'b.png',object_key:'k/2',width:10,height:10,bytes:500,state:'ready'}],total:2};
+  return {items:[],total:0};};
+ const ui=mountAdmin(api,'editor',()=>{});
+ try{
+  document.querySelector('[data-view="Media Library"]').click();await settle(80);
+  assert.deepEqual(calls.filter(c=>c.startsWith('media/previews')),['media/previews?ids=1,2']);
+  const imgs=[...document.querySelectorAll('.media-thumb img')];assert.equal(imgs.length,1);assert.equal(imgs[0].getAttribute('src'),'https://api.cloudinary.com/a.png');assert.equal(imgs[0].getAttribute('alt'),'JACK_STUDIO.png');
+  assert.match(document.getElementById('admin-content').textContent,/1600 × 900 · 2\.4 MB/);assert.match(document.getElementById('admin-content').textContent,/Preview unavailable/);
+ }finally{ui.destroy();}
+});
