@@ -130,3 +130,12 @@ test('virtual showroom shows the built-in Shopify cover until staff choose an im
  assert.ok(html.includes('https://api.cloudinary.com/x.jpg')&&!html.includes('virtual-showroom-cover'));
  const {stat}=await import('node:fs/promises');assert.ok((await stat(new URL('../web/theme-assets/virtual-showroom-cover.jpg',import.meta.url))).size>10000);
 });
+
+test('virtual showroom: the 3D showroom is embedded from this site; other links keep the cover link',()=>{
+ const theme=normalizeTheme(PRESETS['jack-studio-2026'].build()),s=theme.sections.find(x=>x.type==='showroom');
+ let html=renderThemeBody(theme,{});
+ assert.match(html,/<div class="vs-stage" data-showroom="\/showroom\/"/,'old GitHub Pages address maps to /showroom/');
+ assert.ok(!html.includes('github.io')&&html.includes('Loading showroom…')&&html.includes('class="vs-hint"'));
+ s.settings.link='https://example.com/tour';html=renderThemeBody(theme,{});
+ assert.ok(!html.includes('data-showroom')&&html.includes('href="https://example.com/tour"'));
+});

@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Jack Studio | Immersive 3D Walkthrough Concept</title>
+<link rel="stylesheet" href="style.css?v=202611021700">
+</head>
+<body>
+<main id="experience">
+  <canvas id="world" aria-label="Interactive three-dimensional showroom"></canvas>
+  <div id="shade"></div>
+  <div id="navspots"></div>
+  <div id="aim"><span></span></div>
+  <div class="topbar">
+    <div class="brand"><div class="overline">IMMERSIVE VIRTUAL SHOWROOM · 3D CONCEPT</div><div class="wordmark">JACK STUDIO<span class="dot">.</span></div><div class="subtitle">From everyday needs to every journey</div></div>
+    <div class="top-controls">
+      <span id="status" class="status"><i></i> FREE WALK</span>
+      <button id="help" class="glass icon" title="How to explore">?</button>
+      <button id="restart" class="glass">↺ <span>Entrance</span></button>
+    </div>
+  </div>
+  <section id="bottom-left">
+    <div class="kicker">YOU ARE EXPLORING</div>
+    <div id="areaTitle">Entrance</div>
+    <div id="areaDescription">Step into the Jack Studio concept store.</div>
+    <div class="action-row">
+      <button id="autoTour" class="primary">▶ <span>Walk around the store</span></button>
+      <button id="stopTour" class="ghost" hidden>■ Stop tour</button>
+      <button id="viewPhoto" class="ghost">◩ <span>View reference</span></button>
+    </div>
+    <div class="hint">DRAG TO LOOK <b>·</b> CLICK THE FLOOR TO WALK <b>·</b> <kbd>W</kbd><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd> TO MOVE</div>
+  </section>
+  <aside id="mapContainer">
+    <div class="mapHeader"><span>YOUR POSITION</span><button id="mapToggle" title="Toggle map">⌄</button></div>
+    <svg id="floorMap" viewBox="0 0 204 196" role="img" aria-label="Approximate showroom map and destinations">
+      <rect x="14" y="10" width="176" height="176" rx="5" fill="#e4dbc8" stroke="#c1a783" stroke-width="2" />
+      <rect x="22" y="28" width="24" height="38" rx="2" fill="#b29d7e"/>
+      <rect x="22" y="86" width="24" height="38" rx="2" fill="#b29d7e"/>
+      <rect x="22" y="141" width="24" height="38" rx="2" fill="#b29d7e"/>
+      <rect x="158" y="12" width="24" height="62" rx="2" fill="#b29d7e"/>
+      <rect x="158" y="75" width="24" height="49" rx="2" fill="#b29d7e"/>
+      <rect x="158" y="125" width="24" height="50" rx="2" fill="#b29d7e"/>
+      <rect x="95" y="86" width="14" height="36" rx="3" fill="#9a7046"/>
+      <rect x="101" y="130" width="11" height="8" rx="1" fill="#f4f0e8" stroke="#9a7046"/>
+      <rect x="69" y="17" width="66" height="16" rx="1" fill="#292a2a"/>
+      <text x="102" y="29" fill="#ebddd1" font-size="7" text-anchor="middle" letter-spacing="1">JACK STUDIO</text>
+      <path d="M79 183 H125" stroke="#b87945" stroke-width="4"/>
+      <text x="102" y="179" text-anchor="middle" fill="#796451" font-size="8">ENTRANCE</text>
+      <rect x="91" y="58" width="22" height="9" rx="2" fill="#9a7046"/>
+      <rect x="91" y="38" width="22" height="9" rx="1" fill="#2f2b28"/>
+      <g id="mapStops"></g>
+      <g id="mapDot"><circle r="7" fill="#63866d" stroke="white" stroke-width="2.5"/><path id="mapPointer" d="M0 -12 L-4 -5 L4 -5Z" fill="#63866d"/></g>
+    </svg>
+    <div class="mapFooter">Click a dot to walk there</div>
+  </aside>
+  <nav id="craftViews" hidden aria-label="Craft Heritage views"><button data-craft-view="front">正面</button><button data-craft-view="back">背面</button><button data-craft-view="left">左侧</button><button data-craft-view="right">右侧</button></nav><button id="focusCraft">Craft Heritage 展示桌</button><div id="movementPad"><button data-key="w" class="pad up" aria-label="Forward">↑</button><button data-key="a" class="pad left" aria-label="Left">←</button><button data-key="s" class="pad down" aria-label="Back">↓</button><button data-key="d" class="pad right" aria-label="Right">→</button></div>
+  <div id="toast" role="status"></div>
+  <div id="loading"><div class="loadbox"><span>JACK STUDIO</span><div class="loadtrack"><i></i></div><small>BUILDING YOUR VIRTUAL SHOWROOM</small></div></div>
+  <section id="photoModal" hidden>
+    <div class="modal">
+      <div class="modalTop"><div><div class="kicker">REFERENCE FROM YOUR PHOTOGRAPHS</div><h2 id="photoTitle">Urban Carry</h2></div><button id="closePhoto">✕ CLOSE</button></div>
+      <img id="realPhoto" alt="Actual uploaded Jack Studio showroom photograph">
+      <div class="modalBottom"><p>This is one of the original store photos. The surrounding 3D room is a reconstructed concept, not a measured 3D scan.</p><button id="returnRoom">Return to showroom →</button></div>
+    </div>
+  </section>
+  <section id="helpModal" hidden><div class="helpbox"><button id="closeHelp">✕</button><div class="kicker">INTERACTIVE 3D CONCEPT</div><h2>Explore Jack Studio</h2><p>Unlike the previous photo-switching demos, this is a walkable 3D space. Walls, display shelves, islands and products stay in place while you move around them.</p><ul><li><b>Drag</b> to turn your head 360°.</li><li><b>Click the floor</b> to walk through the room.</li><li><b>WASD / ↑↓←→</b> to move and rotate, or use mobile arrows.</li><li><b>Walk around the store</b> to take a guided 3D circuit, without playing any video.</li><li><b>Click white floor markers or the map</b> to walk directly to a display.</li><li><b>View reference</b> to see an actual photo of the corresponding shelf.</li></ul><p class="disclaimer">Concept only: layout, scale, unsupplied angles and product geometry are estimated. Your uploaded photos are incorporated as display textures; this is not a photogrammetry scan or Matterport export.</p><button id="startFromHelp" class="primary">Explore showroom →</button></div></section>
+</main>
+<script src="assets/atlas-data.js?v=202610311407"></script>
+<script src="assets/sprite-data.js?v=202610311407"></script>
+<script src="assets/decal-data.js?v=202610311407"></script>
+<script src="assets/lightbox-data.js?v=202610311407"></script>
+<script src="assets/mannequin-data.js?v=202610311407"></script>
+<script src="assets/gift-data.js?v=202610311407"></script>
+<script src="assets/heritage-data.js?v=202611021700"></script>
+<script src="assets/urban-data.js?v=202610311407"></script>
+<script src="assets/pro-data.js?v=202611021800"></script>
+<script src="app.js?v=202611021800"></script>
+</body>
+</html>

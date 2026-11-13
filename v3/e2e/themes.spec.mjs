@@ -29,6 +29,7 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
  await expect(page.getByText('FREE NAME ENGRAVING ON EVERY WALLET')).toBeVisible();
  await expect(page).toHaveTitle('Jack Studio Leather Shop | Premium Bag & Wallets & Belts in Malaysia');
  await expect(page.getByRole('heading',{name:'Explore Our Collections'})).toBeVisible();
+ await expect(page.locator('.vs-stage[data-showroom="/showroom/"] iframe.vs-frame')).toHaveAttribute('src','/showroom/');await expect(page.locator('.vs-stage')).toHaveClass(/is-live/,{timeout:20000});
  await expect(page.locator('.cc-btn').first()).toHaveCSS('background-color','rgb(118, 124, 130)');
  await page.getByRole('tab',{name:'Leather Bag'}).click();await expect(page.getByRole('tab',{name:'Leather Bag'})).toHaveAttribute('aria-selected','true');
  await page.getByRole('button',{name:'Show About Us menu'}).click();await expect(page.getByRole('link',{name:'Brand Story',exact:true})).toBeVisible();

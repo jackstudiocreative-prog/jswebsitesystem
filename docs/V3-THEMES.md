@@ -109,3 +109,14 @@ fill automatically; **Auto-fill images** on a theme (`POST /api/v3/themes/:id/au
 fills empty slots of an existing theme. Images staff picked themselves are never replaced; duplicates
 stay exact copies. The virtual-showroom cover was a Shopify theme asset, not a library file, so upload
 it in the Media Library and pick it in the theme editor.
+
+## Virtual showroom (embedded)
+
+The 3D showroom from `jackstudiocreative-prog/js-showroom` (JackStudio_Matterport_Concept_V5) is copied
+into `v3/showroom/` by `v3/scripts/import-showroom.py` and served at `/showroom/`. The script moves the
+textures out of JavaScript into WebP files (about 66 MB down to about 7 MB to load), so it opens quickly.
+The home-page section shows it inside the page (no new page): the cover image shows while it loads, it
+starts loading as soon as the rest of the page has loaded (or when visitors get within two screens), and
+its render loop pauses while it is scrolled out of view. The old GitHub Pages link maps to `/showroom/`;
+any other link keeps the cover-and-link behaviour. Re-run the script after changing the showroom repo.
+`/showroom/*` may be framed by this site only (`X-Frame-Options: SAMEORIGIN`, `frame-ancestors 'self'`).

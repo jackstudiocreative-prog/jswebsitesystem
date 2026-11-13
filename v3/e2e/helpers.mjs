@@ -12,9 +12,10 @@ export async function placeholderImages(page){
 }
 // The editor preview is a sandboxed iframe with scripts disabled, so axe cannot run inside it; the
 // same rendered page is scanned on its public URL instead.
+// The embedded 3D showroom (/showroom/) is its own app with its existing design; it is not audited here.
 export async function axe(page,label){
  const preview=await page.evaluate(()=>{const f=document.querySelector('.preview-stage iframe');if(!f)return false;window.__axePreview=f;f.replaceWith(Object.assign(document.createElement('div'),{id:'axe-preview-placeholder'}));return true;});
- const result=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21a','wcag21aa']).analyze();
+ const result=await new AxeBuilder({page}).withTags(['wcag2a','wcag2aa','wcag21a','wcag21aa']).exclude('.vs-frame').analyze();
  if(preview)await page.evaluate(()=>document.getElementById('axe-preview-placeholder').replaceWith(window.__axePreview));
  // Known, pending brand decision: the V2 brand button (white on #a97845) is 3.85:1, below AA 4.5:1.
  // Only that exact finding is set aside; every other violation fails the test.
