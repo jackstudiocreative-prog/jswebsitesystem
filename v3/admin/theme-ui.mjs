@@ -18,13 +18,14 @@ export function createThemes(h){
   if(typeof window!=='undefined')window.addEventListener('resize',fit);
   return {stage,show:data=>{frame.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());fit();},setWidth:w=>{width=w;fit();},fit,destroy:()=>typeof window!=='undefined'&&window.removeEventListener('resize',fit)};
  }
- // Full-page preview in a new tab: a top bar plus the same sandboxed frame (no scripts, links disabled).
+ // Full-page preview: opens the real storefront in a new tab with this theme (unsaved edits included),
+ // so menus, tabs and links to other pages all work. The theme is handed over through this browser's
+ // storage only (same site); visitors never see it. "Exit preview" in the tab returns to the live theme.
  function openPreview(data,title){
-  if(typeof window==='undefined'||!window.open)return;const w=window.open('','_blank');if(!w){notify('Allow pop-ups for this site to open the preview.');return;}
-  const d=w.document;d.title='Preview · '+title;d.body.style.cssText='margin:0;font:13px Inter,system-ui,sans-serif;background:#f4f5f3';
-  const bar=d.createElement('div');bar.style.cssText='position:fixed;inset:0 0 auto 0;height:40px;display:flex;align-items:center;gap:8px;padding:0 16px;background:#1d2a22;color:#fff';bar.textContent='Preview · '+title+' — links are disabled; close this tab to return to the editor.';
-  const f=d.createElement('iframe');f.setAttribute('sandbox','');f.setAttribute('title','Theme preview: '+title);f.setAttribute('referrerpolicy','no-referrer');f.style.cssText='position:fixed;top:40px;left:0;width:100%;height:calc(100% - 40px);border:0;background:#fff';
-  f.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());d.body.append(bar,f);
+  if(typeof window==='undefined'||!window.open)return;
+  try{window.localStorage.setItem('jt-theme-preview',JSON.stringify({name:title,theme:data.theme,media:safeMedia(data.media),expires:Date.now()+2*3600*1000}));}
+  catch{notify('Preview needs browser storage. Allow site data for this site and try again.');return;}
+  if(!window.open('/?theme_preview=1','_blank'))notify('Allow pop-ups for this site to open the preview.');
  }
  const confirmed=text=>typeof window==='undefined'||window.confirm(text);
  async function rename(theme){

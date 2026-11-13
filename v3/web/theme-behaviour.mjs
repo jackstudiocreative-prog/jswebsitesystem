@@ -61,7 +61,32 @@ function newsletter(root){
  for(const form of root.querySelectorAll('[data-jt-newsletter]'))form.addEventListener('submit',e=>{e.preventDefault();const note=form.parentElement.querySelector('[data-jt-newsletter-note]');if(note){note.textContent='Newsletter sign-up is not connected yet. Please check back soon.';note.hidden=false;}});
 }
 export function activateTheme(root,settings){applyThemeVars(root,settings);announcements(root);menus(root);carousels(root);tabs(root);flaps(root);newsletter(root);}
-// Fetches the live theme; resolves to null when none is published (or the request fails).
+// Theme preview from the admin (Preview button): the admin stores the theme in this browser and opens
+// /?theme_preview=1; the flag lives in this tab's session so every page in the tab keeps previewing.
+const PREVIEW='jt-theme-preview';
+let media={};
+// Media for the theme being shown: signed private previews (admin preview only); the live site has none yet.
+export const themeMedia=()=>media;
+function previewTheme(){
+ try{
+  const url=new URL(location.href);
+  if(url.searchParams.has('theme_preview')){sessionStorage.setItem(PREVIEW,'1');url.searchParams.delete('theme_preview');history.replaceState(null,'',url.pathname+url.search+url.hash);}
+  if(sessionStorage.getItem(PREVIEW)!=='1')return null;
+  const p=JSON.parse(localStorage.getItem(PREVIEW)||'null');
+  if(!p?.theme?.settings||!(p.expires>Date.now())){sessionStorage.removeItem(PREVIEW);return null;}
+  return p;
+ }catch{return null;}
+}
+function previewBar(name){
+ const bar=document.createElement('div');bar.className='jt-preview-bar';bar.setAttribute('role','status');
+ const text=document.createElement('span');text.textContent=`Previewing theme: ${name} · Not visible to customers`;
+ const exit=document.createElement('button');exit.type='button';exit.textContent='Exit preview';
+ exit.addEventListener('click',()=>{try{sessionStorage.removeItem(PREVIEW);}catch{}location.reload();});
+ bar.append(text,exit);document.body.prepend(bar);
+}
+// Fetches the live theme (or the admin preview theme); resolves to null when none is published.
 export async function liveTheme(){
+ const p=previewTheme();
+ if(p){media=Object.fromEntries(Object.entries(p.media??{}).filter(([,u])=>{try{const x=new URL(u);return x.protocol==='https:'&&x.hostname==='api.cloudinary.com';}catch{return false;}}));previewBar(String(p.name??'Theme'));return p.theme;}
  try{const r=await fetch('/api/v3/storefront/theme');if(!r.ok)return null;const data=await r.json();return data.theme??null;}catch{return null;}
 }

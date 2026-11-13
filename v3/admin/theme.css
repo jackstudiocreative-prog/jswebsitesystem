@@ -290,3 +290,7 @@ button.jh-nav-link{background:none;border:0;margin:0;font-family:inherit;line-he
  .si-large .si-item,.si-medium .si-item{flex:1 1 0;width:auto;max-width:none;flex-direction:column;align-items:center;text-align:center;gap:8px}
  .si-large .si-icon,.si-medium .si-icon{width:28px;height:28px}.si-large .si-title,.si-medium .si-title{font-size:11.5px;letter-spacing:.3px;margin-bottom:3px}.si-large .si-sub,.si-medium .si-sub{font-size:9.5px;line-height:1.25}
 }
+/* Admin theme preview bar (storefront tab opened by the Preview button). */
+.jt-preview-bar{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px 14px;padding:8px 16px;background:#1d2a22;color:#fff;font:500 13px/1.4 Inter,system-ui,sans-serif;text-align:center}
+.jt-preview-bar button{border:1px solid rgba(255,255,255,.55);background:transparent;color:#fff;border-radius:6px;padding:4px 12px;font:inherit;cursor:pointer}
+.jt-preview-bar button:hover{background:rgba(255,255,255,.12)}

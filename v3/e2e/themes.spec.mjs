@@ -41,3 +41,21 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
  await page.getByRole('button',{name:'Close menu'}).click();await expect(page.getByRole('navigation',{name:'Main menu'})).toBeHidden();
  g.check();
 });
+
+test('Preview opens the real storefront with the edited theme; links keep the preview until Exit preview',async({page,context})=>{
+ const g=guard(page);await page.goto('/admin');await nav(page,'Website');
+ await page.locator('.theme-current').getByRole('button',{name:'Edit theme'}).click();
+ await page.getByRole('button',{name:'Edit Hero banner'}).click();
+ await page.getByLabel('Heading',{exact:true}).fill('Unsaved preview heading');
+ const [tab]=await Promise.all([context.waitForEvent('page'),page.getByRole('button',{name:'Preview',exact:true}).click()]);
+ await expect(tab.getByRole('heading',{level:1,name:'Unsaved preview heading'})).toBeVisible();
+ await expect(tab.getByRole('status').filter({hasText:'Previewing theme'})).toBeVisible();
+ expect(new URL(tab.url()).search).toBe('');
+ await axe(tab,'storefront preview');
+ await tab.getByRole('button',{name:'Show About Us menu'}).click();await tab.getByRole('link',{name:'Brand Story',exact:true}).click();
+ await expect(tab).toHaveURL(/\/pages\/brand-story$/);await expect(tab.locator('.jt-preview-bar')).toBeVisible();await expect(tab.locator('.jh-header')).toBeVisible();
+ await tab.getByRole('button',{name:'Exit preview'}).click();await expect(tab.locator('.jt-preview-bar')).toHaveCount(0);
+ // Customers (no preview flag) always get the live theme.
+ const visitor=await context.newPage();await visitor.goto('/');await expect(visitor.locator('.jh-header')).toBeVisible();await expect(visitor.locator('.jt-preview-bar')).toHaveCount(0);await expect(visitor.getByRole('heading',{level:1,name:'Unsaved preview heading'})).toHaveCount(0);await visitor.close();
+ g.check();
+});
