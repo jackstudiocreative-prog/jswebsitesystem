@@ -121,3 +121,12 @@ test('theme renderer escapes text, emits only validated colours and works withou
  assert.match(preview,/style="--cc-accent:#767c82"/);assert.match(preview,/<style>:root\{--jt-background:#f8f4ea/);
  assert.match(themeCss(t.settings),/--jt-heading-font:"Bebas Neue"/);
 });
+
+test('virtual showroom shows the built-in Shopify cover until staff choose an image',async()=>{
+ const theme=normalizeTheme(PRESETS['jack-studio-2026'].build()),showroom=()=>theme.sections.find(s=>s.type==='showroom');
+ assert.match(renderThemeBody(theme,{}),/<img class="vs-cover-img" src="\/theme-assets\/virtual-showroom-cover\.jpg"/);
+ showroom().settings.image_id='9';
+ const html=renderThemeBody(theme,{'9':'https://api.cloudinary.com/x.jpg'});
+ assert.ok(html.includes('https://api.cloudinary.com/x.jpg')&&!html.includes('virtual-showroom-cover'));
+ const {stat}=await import('node:fs/promises');assert.ok((await stat(new URL('../web/theme-assets/virtual-showroom-cover.jpg',import.meta.url))).size>10000);
+});
