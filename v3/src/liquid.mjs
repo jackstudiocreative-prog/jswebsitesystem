@@ -3,12 +3,12 @@
 // editor). Inline <script> blocks are split out and served as same-site files (the storefront CSP allows
 // no inline scripts); inline onclick/onchange calls become data attributes run by theme-assets/shopify/runtime.js.
 import {Liquid,Tag} from 'liquidjs';
-import {SECTIONS,BLOCKS,SNIPPETS,LOCALE,SETTINGS,OUTLETS} from './liquid-files.mjs';
+import {SECTIONS,BLOCKS,SNIPPETS,LOCALE,SETTINGS,OUTLETS,VIDEOS} from './liquid-files.mjs';
 import {SECTION_SCHEMAS,BLOCK_SCHEMAS} from '../shared/liquid-theme.mjs';
 import {shopifyKey} from './shopify-import.mjs';
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-export const PLACEHOLDER="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%23e7e1d3'/%3E%3C/svg%3E";
+export const PLACEHOLDER="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1200' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%23e7e1d3'/%3E%3C/svg%3E";
 const SHOPIFY_IMAGE=/^shopify:\/\/shop_images\/(.+)$/;
 const isImageRef=v=>typeof v==='string'&&(SHOPIFY_IMAGE.test(v)||/^[1-9]\d{0,17}$/.test(v));
 const fileKey=ref=>SHOPIFY_IMAGE.test(ref)?shopifyKey('files/'+ref.match(SHOPIFY_IMAGE)[1]):null;
@@ -16,9 +16,14 @@ const fileKey=ref=>SHOPIFY_IMAGE.test(ref)?shopifyKey('files/'+ref.match(SHOPIFY
 // Shopify-style image object. src is a URL when one can be shown (signed admin preview); otherwise a
 // neutral placeholder so layouts keep their shape.
 function image(row,url,alt){
- const src=url||PLACEHOLDER,w=row?.width??1600,h=row?.height??1200;
+ const src=url||(row?.width&&row?.height?`data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${row.width}' height='${row.height}' viewBox='0 0 ${row.width} ${row.height}'%3E%3Crect width='${row.width}' height='${row.height}' fill='%23e7e1d3'/%3E%3C/svg%3E`:PLACEHOLDER),w=row?.width??1600,h=row?.height??1200;
  return {id:row?.id?String(row.id):null,src,url:src,alt:alt??row?.label??'',width:w,height:h,aspect_ratio:w/h,presentation:{focal_point:'50% 50%'},toString(){return src;}};
 }
+// Shopify-hosted video (shopify://files/videos/<name>) → object for the video_tag filter.
+function video(v){const name=String(v??'').match(/^shopify:\/\/files\/videos\/(.+)$/)?.[1];const m=name&&VIDEOS[name];return m?{alt:'',sources:[{url:m.mp4,mime_type:'video/mp4'}],preview_image:{src:m.poster,url:m.poster,toString:()=>m.poster},toString:()=>m.mp4}:null;}
+// Shopify resource links (shopify://pages/x) → storefront paths.
+function link(v){if(typeof v!=='string')return v;const m=v.match(/^shopify:\/\/(pages|collections|products|blogs)\/(.+)$/);return m?`/${m[1]}/${m[2]}`:v;}
+function outlet(v,ctx){const h=String(v??'').split('/').pop();const o=OUTLETS.find(x=>x.handle===h);return o?Object.fromEntries(Object.entries(o).map(([k,x])=>[k,{value:k==='photo'&&x?ctx.fileImage(x):x}])):null;}
 function videoUrl(v){
  const s=String(v??'');let m=s.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([\w-]{6,20})/);if(m)return {id:m[1],type:'youtube',toString:()=>s};
  m=s.match(/vimeo\.com\/(?:video\/)?(\d{5,12})/);if(m)return {id:m[1],type:'vimeo',toString:()=>s};return null;
@@ -64,9 +69,11 @@ function resolveSettings(schema,values,ctx){
   if(!f.id)continue;let v=values?.[f.id];if(v===undefined)v=f.default;
   if(f.type==='image_picker')v=v?ctx.img(v):null;
   else if(f.type==='collection')v=v?ctx.collection(String(v)):null;
-  else if(f.type==='video')v=null; // Shopify-hosted videos are not carried over; sections fall back to their video link.
+  else if(f.type==='video')v=video(v);
+  else if(f.type==='url'||f.type==='link_list')v=link(v);
+  else if(f.type==='metaobject')v=f.metaobject_type==='outlet'?outlet(v,ctx):null;
   else if(f.type==='video_url')v=videoUrl(v);
-  else if(f.type==='product'||f.type==='metaobject')v=null;
+  else if(f.type==='product')v=null;
   out[f.id]=v;
  }
  for(const [k,v] of Object.entries(values??{}))if(!(k in out))out[k]=v;
@@ -102,7 +109,9 @@ function liquid(){
   const attrs={src,alt:o.alt??(typeof v==='object'?v.alt:''),loading:o.loading,width:o.width??(typeof v==='object'?v.width:undefined),height:o.height??(typeof v==='object'?v.height:undefined),class:o.class,sizes:o.sizes};
   return '<img'+Object.entries(attrs).filter(([,x])=>x!=null&&x!=='').map(([k,x])=>` ${k}="${esc(x)}"`).join('')+'>';});
  engine.registerFilter('placeholder_svg_tag',(name,cls)=>`<svg class="${esc(cls??'placeholder-svg')}" viewBox="0 0 4 3" aria-hidden="true"><rect width="4" height="3" fill="#e7e1d3"/></svg>`);
- engine.registerFilter('video_tag',()=> '');
+ engine.registerFilter('video_tag',function(v,...args){if(!v?.sources?.length)return '';const o=Object.fromEntries(args.filter(Array.isArray));
+  const flags=['autoplay','muted','loop','playsinline','controls'].filter(k=>o[k]===true).join(' ');const attrs=['preload','class'].filter(k=>o[k]).map(k=>` ${k}="${esc(o[k])}"`).join('');
+  return `<video ${flags}${attrs} poster="${esc(v.preview_image?.src??'')}">${v.sources.map(s=>`<source src="${esc(s.url)}" type="${esc(s.mime_type)}">`).join('')}<img src="${esc(v.preview_image?.src??'')}" alt=""></video>`;});
  engine.registerFilter('asset_url',name=>'/theme-assets/shopify/'+String(name));
  engine.registerFilter('stylesheet_tag',url=>`<link rel="stylesheet" href="${esc(url)}">`);engine.registerFilter('script_tag',url=>`<script src="${esc(url)}"></script>`);
  engine.registerFilter('money',money);engine.registerFilter('money_with_currency',c=>money(c)+' MYR');engine.registerFilter('money_without_trailing_zeros',c=>money(c).replace(/\.00$/,''));engine.registerFilter('money_without_currency',c=>money(c).slice(2));
@@ -118,7 +127,7 @@ function liquid(){
 const PAGE_GLOBALS=page=>({
  settings:SETTINGS,shop:{name:'Jack Studio',url:'',metaobjects:{outlet:{values:OUTLETS.map(o=>({...Object.fromEntries(Object.entries(o).map(([k,v])=>[k,{value:v}]))}))}}},
  routes:{root_url:'/',cart_url:'/cart',cart_add_url:'/cart',collections_url:'/pages/product-collection',all_products_collection_url:'/collections/all',search_url:'/search',account_url:'/account',account_login_url:'/account/login'},
- request:{locale:{iso_code:'en'},page_type:'page',design_mode:false,path:'/pages/'+page.handle,host:''},template:{name:'page',suffix:page.handle},
+ request:{locale:{iso_code:'en'},page_type:page.handle==='home'?'index':'page',design_mode:false,path:page.handle==='home'?'/':'/pages/'+page.handle,host:''},template:{name:page.handle==='home'?'index':'page',suffix:page.handle==='home'?null:page.handle},
  page:{title:page.title,content:page.content??'',handle:page.handle,url:'/pages/'+page.handle},cart:{item_count:0,items:[]},customer:null,
 });
 
@@ -146,6 +155,8 @@ export async function renderPage(db,handle,template,options={}){
 export function extract(html,id){
  const scripts=[];
  html=html.replace(/<script\b([^>]*)>([\s\S]*?)<\/script>/gi,(m,attrs,body)=>{if(/type=["']?application\/(ld\+)?json/i.test(attrs))return m;if(/\bsrc=/i.test(attrs))return '';if(body.trim())scripts.push({id,code:body});return '';});
+ // Decorative images in the original theme have no alt text; screen readers should skip them.
+ html=html.replace(/<img(?![^>]*\salt=)/gi,'<img alt=""');
  html=html.replace(/\son(click|change|input|submit)\s*=\s*"([^"]*)"/gi,(m,ev,code)=>` data-lq-on-${ev.toLowerCase()}="${code}"`);
  return {html,scripts};
 }

@@ -11,32 +11,33 @@ export function createPageTools(h){
  function template(content,slug,create){if(content.templates?.[slug])return content.templates[slug];if(!create)return PAGE_TEMPLATES[slug];content.templates??={};return content.templates[slug]=structuredClone(PAGE_TEMPLATES[slug]);}
  const sectionName=s=>s.name||liquidLabel(s.type);
 
- function tree(content,slug,view,choose,redraw){
+ // One group of the tree: the header, the page's sections or the footer (fixed: no add/move/remove).
+ function tree(content,slug,view,choose,redraw,{title='Template',fixed=false}={}){
   const t=template(content,slug,false),box=el('div');
-  box.append(el('h3','Template','theme-group-title'));
+  box.append(el('h3',title,'theme-group-title'));
   const ol=el('ol',undefined,'theme-tree');box.append(ol);
   t.order.forEach((id,i)=>{
-   const s=t.sections[id],name=sectionName(s),selected=view.mode==='lq-section'&&view.id===id;
+   const s=t.sections[id],name=sectionName(s),selected=view.mode==='lq-section'&&view.tpl===slug&&view.id===id;
    const li=el('li',undefined,'theme-tree-item'+(s.disabled?' is-hidden':'')+(selected?' is-selected':''));
-   const open=button('',()=>choose({mode:'lq-section',id}));open.classList.add('theme-tree-open');open.append(icon('section'),el('span',name,'theme-tree-name'));open.setAttribute('aria-label',`${readOnly?'View':'Edit'} ${name}`);if(selected)open.setAttribute('aria-current','true');
+   const open=button('',()=>choose({mode:'lq-section',tpl:slug,id}));open.classList.add('theme-tree-open');open.append(icon('section'),el('span',name,'theme-tree-name'));open.setAttribute('aria-label',`${readOnly?'View':'Edit'} ${name}`);if(selected)open.setAttribute('aria-current','true');
    const eye=button('',()=>{const w=template(content,slug,true);w.sections[id].disabled=!w.sections[id].disabled;if(!w.sections[id].disabled)delete w.sections[id].disabled;touch();redraw();},readOnly);eye.classList.add('theme-eye');eye.append(icon(s.disabled?'eyeOff':'eye'));eye.setAttribute('aria-label',`${s.disabled?'Show':'Hide'} ${name}`);
    li.append(open,eye);
-   if(!readOnly)li.append(moreMenu(name,[
+   if(!readOnly&&!fixed)li.append(moreMenu(name,[
     ['Move up',()=>{const w=template(content,slug,true);[w.order[i-1],w.order[i]]=[w.order[i],w.order[i-1]];touch();redraw();},i===0,`Move up ${name}`],
     ['Move down',()=>{const w=template(content,slug,true);[w.order[i+1],w.order[i]]=[w.order[i],w.order[i+1]];touch();redraw();},i===t.order.length-1,`Move down ${name}`],
     ['Remove section',()=>{if(!confirmed(`Remove this ${name} section from the page?`))return;const w=template(content,slug,true);w.order.splice(i,1);delete w.sections[id];touch();if(selected)choose({mode:'tree'});else redraw();},false,`Remove ${name}`]]));
    ol.append(li);
   });
-  if(!readOnly){
+  if(!readOnly&&!fixed){
    const add=select(ADDABLE.map(type=>[type,liquidLabel(type)]),ADDABLE[0]);add.setAttribute('aria-label','Section to add to this page');
    const row=el('div',undefined,'section-adder');row.hidden=true;
    row.append(add,button('Add section',()=>{const w=template(content,slug,true),id=add.value.replace(/[^\w]/g,'_')+'_'+uid(),schema=SECTION_SCHEMAS[add.value];
     const preset=schema.presets?.[0]??{},blocks={},order=[];for(const b of preset.blocks??[]){const bid=uid();blocks[bid]={type:b.type,settings:{...defaultsOf(blockSchema(add.value,b.type)),...(b.settings??{})}};order.push(bid);}
-    w.sections[id]={type:add.value,settings:{...defaultsOf(schema),...(preset.settings??{})},blocks,block_order:order};w.order.push(id);touch();choose({mode:'lq-section',id});}));
+    w.sections[id]={type:add.value,settings:{...defaultsOf(schema),...(preset.settings??{})},blocks,block_order:order};w.order.push(id);touch();choose({mode:'lq-section',tpl:slug,id});}));
    const plus=button('+ Add section',()=>{row.hidden=!row.hidden;plus.setAttribute('aria-expanded',String(!row.hidden));});plus.classList.add('theme-add-section');plus.setAttribute('aria-expanded','false');
    box.append(plus,row);
   }
-  const page=button('',()=>choose({mode:'lq-page'}));page.classList.add('theme-settings-open');page.append(icon('gear'),el('span','Page title and text'));if(view.mode==='lq-page')page.classList.add('is-selected');box.append(page);
+  if(!fixed&&slug!=='home'){const page=button('',()=>choose({mode:'lq-page'}));page.classList.add('theme-settings-open');page.append(icon('gear'),el('span','Page title and text'));if(view.mode==='lq-page')page.classList.add('is-selected');box.append(page);}
   return box;
  }
 

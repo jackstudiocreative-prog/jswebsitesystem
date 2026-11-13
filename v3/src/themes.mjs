@@ -4,7 +4,7 @@ import {resolvePageSections} from './pages.mjs';
 import {HttpError} from './auth.mjs';
 import {autofillThemeImages} from './shopify-import.mjs';
 import {renderPage,scriptBundle} from './liquid.mjs';
-import {templateFor,PAGE_SLUGS,SECTION_SCHEMAS} from '../shared/page-templates.mjs';
+import {templateFor,SITE_PAGES,SECTION_SCHEMAS} from '../shared/page-templates.mjs';
 // Online Store themes. One theme can be live; the rest are the theme library. As in Shopify, saving
 // the live theme changes the storefront immediately; staff duplicate it to work on a private copy.
 // Writes lock the row and check an integer revision so two editors cannot overwrite each other.
@@ -117,9 +117,10 @@ async function mediaFor(db,resolved,cloud){
  return media;
 }
 // Saved theme preview for any staff role (viewers included).
-export async function previewTheme(db,id,cloud){
- const theme=await themeDetail(db,id);const resolved=await resolveTheme(db,content(theme.content));
- return {theme:resolved,name:theme.name,media:await mediaFor(db,resolved,cloud),expiresIn:300};
+export async function previewTheme(db,id,cloud,page='home'){
+ const theme=await themeDetail(db,id);const clean=content(theme.content),resolved=await resolveTheme(db,clean);
+ if(page!=null&&!SITE_PAGES.includes(page))bad('Unknown page');
+ return {theme:resolved,name:theme.name,media:await mediaFor(db,resolved,cloud),page:page==null?null:await pageHtml(db,clean,page,cloud),expiresIn:300};
 }
 // Unsaved editor state: validated and resolved like a save, but nothing is written.
 export async function previewThemeDraft(db,input,cloud){
@@ -128,22 +129,27 @@ export async function previewThemeDraft(db,input,cloud){
  return {theme:resolved,media:await mediaFor(db,resolved,cloud),expiresIn:300};
 }
 // Other storefront pages (/pages/<slug>) are rendered from the theme's Shopify Liquid sections.
+// Whole page as on Shopify: header, the page's sections, footer ('_frame': header and footer only, for
+// pages that are not built from the theme).
 async function pageHtml(db,content,slug,cloud){
- const t=templateFor(content,slug);if(!t)return null;
- const r=await renderPage(db,slug,t,{mediaUrl:cloud?m=>cloud.preview(m):null});
- const ids=new Set(r.scripts.map(s=>s.id));
- return {slug,title:t.title,html:r.html,scripts:t.order.filter(id=>ids.has(id)).map(id=>`${t.sections[id].type}:${id}`)};
+ const page=slug==='_frame'?{title:'',order:[],sections:{}}:templateFor(content,slug);if(!page)return null;
+ const opts={mediaUrl:cloud?m=>cloud.preview(m):null},out={},scripts=[];
+ for(const [part,t] of [['header',templateFor(content,'header')],['main',page],['footer',templateFor(content,'footer')]]){
+  const r=await renderPage(db,slug==='_frame'?'home':slug,{...t,title:page.title,content:page.content},opts);out[part]=r.html;
+  const ids=new Set(r.scripts.map(s=>s.id));scripts.push(...t.order.filter(id=>ids.has(id)).map(id=>`${t.sections[id].type}:${id}`));
+ }
+ return {slug,title:page.title,header:out.header,html:out.main,footer:out.footer,scripts};
 }
 export async function publicThemePage(db,slug){
- if(!PAGE_SLUGS.includes(slug))throw new HttpError(404,'Page not found');
+ if(!SITE_PAGES.includes(slug)&&slug!=='_frame')throw new HttpError(404,'Page not found');
  const theme=(await db.query('SELECT content FROM themes WHERE is_live AND NOT archived')).rows[0];if(!theme)throw new HttpError(404,'No live theme');
  return pageHtml(db,content(theme.content),slug,null);
 }
 // Staff preview of unsaved pages (all pages, or one with {page}); images use signed private previews.
 export async function previewThemePages(db,input,cloud){
  object(input,['content','page']);const clean=content(input.content);await checkReferences(db,clean);
- const slugs=input.page!=null?[String(input.page)]:PAGE_SLUGS;if(slugs.some(s=>!PAGE_SLUGS.includes(s)))bad('Unknown page');
- const pages={};for(const slug of slugs)pages[slug]=await pageHtml(db,clean,slug,cloud);
+ const slugs=input.page!=null?[String(input.page)]:SITE_PAGES;if(slugs.some(s=>!SITE_PAGES.includes(s)))bad('Unknown page');
+ const pages={};for(const slug of input.page!=null?slugs:[...slugs,'_frame'])pages[slug]=await pageHtml(db,clean,slug,cloud);
  return {pages,expiresIn:300};
 }
 // Section scripts for a page (?s=type:id,…). They only depend on the section id, so the file is cacheable

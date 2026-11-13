@@ -3,7 +3,9 @@
 // theme; a theme stores its own copy once staff edit a page in the theme editor.
 import {SECTION_SCHEMAS,BLOCK_SCHEMAS,PAGE_TEMPLATES} from './liquid-theme.mjs';
 export {SECTION_SCHEMAS,PAGE_TEMPLATES};
-export const PAGE_SLUGS=Object.keys(PAGE_TEMPLATES);
+// Storefront /pages/<slug> pages; 'home', 'header' and 'footer' are the home page and the site header/footer.
+export const PAGE_SLUGS=Object.keys(PAGE_TEMPLATES).filter(s=>!['home','header','footer'].includes(s));
+export const SITE_PAGES=['home',...PAGE_SLUGS];
 export const blockSchema=(sectionType,type)=>SECTION_SCHEMAS[sectionType]?.blocks?.find(b=>b.type===type)??BLOCK_SCHEMAS[type];
 export const templateFor=(content,slug)=>content?.templates?.[slug]??PAGE_TEMPLATES[slug]??null;
 export const liquidLabel=type=>SECTION_SCHEMAS[type]?.name??type;

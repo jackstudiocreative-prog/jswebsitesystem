@@ -4,6 +4,7 @@
 // payment gateway. It is not referenced by the build or by Vercel.
 import {createServer} from 'node:http';
 import {readFile} from 'node:fs/promises';
+import {shopifyKey} from '../src/shopify-import.mjs';
 import {fileURLToPath} from 'node:url';
 import {build} from 'esbuild';
 import {PGlite} from '@electric-sql/pglite';
@@ -22,6 +23,8 @@ const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisor
 await migrate(sql);
 await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");
 for(const label of ['card-holder-brown.jpg','card-holder-black.jpg','weekender.jpg'])await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,format,label,width,height) VALUES ($1,'image/jpeg',200000,'ready','editor','jpg',$2,1600,1600)",['e2e/'+label,label]);
+// Shopify images the page templates use, with their real sizes, so layouts match the Shopify site.
+for(const [name,[w,h]] of Object.entries(JSON.parse(await readFile(new URL('e2e/shopify-image-sizes.json',root),'utf8'))))await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,format,label,width,height) VALUES ($1,'image/png',200000,'ready','editor','png',$2,$3,$4)",[shopifyKey('files/'+name),name,w,h]);
 await db.query('SET ROLE jackstudio_api');
 const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.repeat(10),actionUrl:`http://127.0.0.1:${port}/pay/mock`,baseUrl:'https://e2e.test'});
 const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id}});

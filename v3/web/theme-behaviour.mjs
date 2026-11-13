@@ -83,7 +83,7 @@ const PREVIEW='jt-theme-preview';
 let media={};
 // Media for the theme being shown: signed private previews (admin preview only); the live site has none yet.
 export const themeMedia=()=>media;
-function previewTheme(){
+export function previewTheme(){
  try{
   const url=new URL(location.href);
   if(url.searchParams.has('theme_preview')){sessionStorage.setItem(PREVIEW,'1');url.searchParams.delete('theme_preview');history.replaceState(null,'',url.pathname+url.search+url.hash);}
@@ -102,6 +102,9 @@ function previewBar(name){
 }
 // Pages (/pages/<slug>) of the admin preview theme, already rendered by the admin; null when not previewing.
 export const previewPages=()=>previewTheme()?.pages??null;
+// Shows the "Previewing theme" bar once (preview tabs only).
+let barShown=false;
+export function previewInfo(){const p=previewTheme();if(p&&!barShown&&!document.querySelector('.jt-preview-bar')){barShown=true;previewBar(String(p.name??'Theme'));}return p;}
 // Fetches the live theme (or the admin preview theme); resolves to null when none is published.
 export async function liveTheme(){
  const p=previewTheme();

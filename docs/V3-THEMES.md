@@ -142,3 +142,15 @@ as on Shopify. `v3/scripts/import-shopify-theme.mjs` copies the theme export int
   shelves on Product Collection, and sending the contact/newsletter forms (they say so instead of
   pretending to send). Images follow the media rules above (placeholders on the public site until public
   image delivery is enabled).
+
+### Whole site from the Shopify theme
+
+The home page, header (`jack-header`) and footer (`jack-footer`) are now rendered from the Shopify Liquid
+sections too (`templates.home`, `templates.header`, `templates.footer`; defaults from the live Shopify theme
+"Website design 2026": `templates/index.json` and `config/settings_data.json`), so every page has the same
+markup and CSS as Shopify. The theme editor's tree shows Header / Template / Footer from those templates.
+Liquid pages load only the Shopify theme's stylesheet plus `theme-assets/shopify/base.css` (fonts, preview
+bar); the earlier hand-built home sections (`content.header/sections/footer`) are kept for compatibility but
+no longer shown. Shopify-hosted videos play from Shopify's video CDN (`media-src https://cdn.shopify.com`)
+until they are moved. Section heights were checked against jackstudio.com.my at 1521px: all match except
+sections that need catalog data (best sellers, series shelves) and the service-page video.

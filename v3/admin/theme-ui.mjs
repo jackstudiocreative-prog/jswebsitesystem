@@ -2,7 +2,7 @@
 // (header, home page template, footer and theme settings with a live device preview), modelled on
 // Shopify's Online Store. Uses the workspace helpers from catalog-ui.mjs.
 import {THEME_SETTINGS,THEME_SECTIONS,TEMPLATE_TYPES,GROUPS,MAX_TEMPLATE_SECTIONS,sectionLabel,sectionFields,defaults,fieldDefaults,newSectionId} from '../shared/theme-schema.mjs';
-import {themeDocument,themePageDocument} from './theme-render.mjs';
+import {themeDocument,liquidDocument} from './theme-render.mjs';
 import {createPageTools} from './theme-pages-ui.mjs';
 import {PAGE_SLUGS,PAGE_TEMPLATES} from '../shared/page-templates.mjs';
 const DEVICES=[['desktop','Desktop',1280],['tablet','Tablet',768],['mobile','Mobile',390]];
@@ -18,7 +18,7 @@ export function createThemes(h){
   let width=1280;
   const fit=()=>{const avail=stage.clientWidth||width,scale=Math.min(1,avail/width);frame.style.width=width+'px';frame.style.height=height+'px';frame.style.transform=`scale(${scale})`;frame.style.left=Math.max(0,Math.round((avail-width*scale)/2))+'px';stage.style.height=Math.round(height*scale)+'px';};
   if(typeof window!=='undefined')window.addEventListener('resize',fit);
-  return {stage,show:data=>{frame.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());fit();},showPage:(data,html)=>{frame.srcdoc=themePageDocument(data.theme,safeMedia(data.media),origin(),html);fit();},setWidth:w=>{width=w;fit();},fit,destroy:()=>typeof window!=='undefined'&&window.removeEventListener('resize',fit)};
+  return {stage,show:data=>{frame.srcdoc=data.page?liquidDocument(origin(),data.page):themeDocument(data.theme,safeMedia(data.media),origin());fit();},showSite:p=>{frame.srcdoc=liquidDocument(origin(),p);fit();},setWidth:w=>{width=w;fit();},fit,destroy:()=>typeof window!=='undefined'&&window.removeEventListener('resize',fit)};
  }
  // Full-page preview: opens the real storefront in a new tab with this theme (unsaved edits included),
  // so menus, tabs and links to other pages all work. The theme is handed over through this browser's
@@ -102,8 +102,7 @@ export function createThemes(h){
   function schedule(){if(readOnly)return;clearTimeout(timer);timer=setTimeout(()=>refresh(),600);}
   async function refresh(){
    note.textContent='Updating preview…';
-   try{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!current(t))return;last=data;
-    if(page!=='home'){const pages=(await api('themes/preview-pages',{content:readOnly?theme.content:content,page},'POST')).pages;if(!current(t))return;frame.showPage(data,pages[page].html);}else frame.show(data);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
+   try{const html=readOnly?(await api(`themes/${id}/preview?page=${page}`)).page:(await api('themes/preview-pages',{content,page},'POST')).pages[page];if(!current(t))return;frame.showSite(html);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
    catch(err){note.textContent='Preview not updated: '+err.message;}
   }
   // Panel, laid out like Shopify's editor: a compact section tree (icon, name, eye toggle, ··· menu)
@@ -131,36 +130,12 @@ export function createThemes(h){
    pick.addEventListener('change',()=>{page=pick.value;view={mode:'tree'};draw();refresh();});
    const head=el('div',undefined,'theme-panel-title');head.append(pick);panel.append(head);
    const tree=el('div',undefined,'theme-tree-wrap');panel.append(tree);
-   for(const [group,title,aria,list] of groups){
-    if(group==='sections'&&page!=='home'){tree.append(pages.tree(content,page,view,v=>{view=v;draw();},draw));continue;}
-    tree.append(el('h3',title,'theme-group-title'));
-    const ol=el('ol',undefined,'theme-tree');tree.append(ol);
-    for(const [i,s] of list.entries()){
-     const name=sectionLabel(s.type),selected=view.mode==='section'&&view.id===s.id;
-     const li=el('li',undefined,'theme-tree-item'+(s.hidden?' is-hidden':'')+(selected?' is-selected':''));
-     const open=button('',()=>{view={mode:'section',group,id:s.id};draw();});open.classList.add('theme-tree-open');open.append(icon(iconFor(group,s.type)),el('span',name,'theme-tree-name'));
-     open.setAttribute('aria-label',`${readOnly?'View':'Edit'} ${name}${list.filter(x=>x.type===s.type).length>1?' '+(i+1):''}`);if(selected)open.setAttribute('aria-current','true');
-     const eye=button('',()=>{s.hidden=!s.hidden;touch();draw();},readOnly);eye.classList.add('theme-eye');eye.append(icon(s.hidden?'eyeOff':'eye'));eye.setAttribute('aria-label',`${s.hidden?'Show':'Hide'} ${name}`);eye.setAttribute('title',s.hidden?'Show section':'Hide section');
-     li.append(open,eye);
-     if(group==='sections'&&!readOnly)li.append(moreMenu(name,[
-      ['Move up',()=>{[list[i-1],list[i]]=[list[i],list[i-1]];touch();draw();},i===0,`Move up ${name}`],
-      ['Move down',()=>{[list[i+1],list[i]]=[list[i],list[i+1]];touch();draw();},i===list.length-1,`Move down ${name}`],
-      ['Remove section',()=>{if(!confirmed(`Remove this ${name} section from the theme?`))return;list.splice(i,1);if(selected)view={mode:'tree'};touch();draw();},false,`Remove ${name}`]]));
-     ol.append(li);
-    }
-    const missing=group==='sections'?TEMPLATE_TYPES:GROUPS[group].filter(type=>!list.some(s=>s.type===type));
-    if(missing.length&&!readOnly&&(group!=='sections'||list.length<MAX_TEMPLATE_SECTIONS)){
-     const add=select(missing.map(type=>[type,sectionLabel(type)]),missing[0]);add.setAttribute('aria-label',`Section to add to ${aria}`);
-     const row=el('div',undefined,'section-adder');row.hidden=true;row.append(add,button('Add section',()=>{const s={id:newSectionId(),type:add.value,hidden:false,settings:defaults(add.value)};list.push(s);touch();view={mode:'section',group,id:s.id};draw();}));
-     const plus=button('+ Add section',()=>{row.hidden=!row.hidden;plus.setAttribute('aria-expanded',String(!row.hidden));if(!row.hidden)add.focus();});plus.classList.add('theme-add-section');plus.setAttribute('aria-expanded','false');
-     tree.append(plus,row);
-    }
-   }
-   const settings=button('',()=>{view={mode:'settings'};draw();});settings.classList.add('theme-settings-open');settings.append(icon('gear'),el('span','Theme settings'));if(view.mode==='settings')settings.classList.add('is-selected');tree.append(settings);
-   if(view.mode==='settings')return drawForm('Theme settings',THEME_SETTINGS,content.settings,null,'gear');
-   if(view.mode==='lq-section'&&page!=='home'&&pages.template(content,page,false).sections[view.id]){const f=pages.sectionForm(content,page,view.id,draw);return drawCard(f.title,'section',f.body,readOnly?null:[[f.hidden?'Show section':'Hide section',f.toggle],['Remove section',()=>{if(!confirmed('Remove this section from the page?'))return;f.remove();view={mode:'tree'};draw();}]]);}
+   // Header and footer are shared by every page; the template group is the chosen page's sections.
+   const choose=v=>{view=v;draw();};
+   tree.append(pages.tree(content,'header',view,choose,draw,{title:'Header',fixed:true}),pages.tree(content,page,view,choose,draw,{title:'Template'}),pages.tree(content,'footer',view,choose,draw,{title:'Footer',fixed:true}));
+   if(view.mode==='lq-section'&&pages.template(content,view.tpl,false)?.sections[view.id]){const f=pages.sectionForm(content,view.tpl,view.id,draw);return drawCard(f.title,'section',f.body,readOnly||view.tpl!==page?null:[[f.hidden?'Show section':'Hide section',f.toggle],['Remove section',()=>{if(!confirmed('Remove this section from the page?'))return;f.remove();view={mode:'tree'};draw();}]]);}
    if(view.mode==='lq-page'&&page!=='home')return drawCard('Page title and text','gear',pages.pageForm(content,page),null);
-   if(view.mode==='section'){const list=content[view.group],s=list.find(x=>x.id===view.id);if(s)return drawForm(sectionLabel(s.type),sectionFields(s.type),s.settings,{list,s,group:view.group},iconFor(view.group,s.type));view={mode:'tree'};panel.classList.remove('has-settings');}
+   view={mode:'tree'};panel.classList.remove('has-settings');
   }
   function drawCard(title,iconName,body,menu){
    const card=el('div',undefined,'theme-settings-card'),head=el('div',undefined,'theme-settings-head');head.append(icon(iconName),el('h2',title,'theme-form-title'));

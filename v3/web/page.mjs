@@ -1,42 +1,22 @@
-// Public page shell: shows only published content from the read-only storefront API.
+// Public page shell (/pages/<slug>): pages built from the theme's Shopify sections, or published V3
+// pages shown between the theme's header and footer.
 import {renderPage} from '../admin/page-render.mjs';
-import {renderThemeHeader,renderThemeFooter} from '../admin/theme-render.mjs';
-import {activateTheme,liveTheme,themeMedia,previewPages} from './theme-behaviour.mjs';
-// With a live Online Store theme, its header and footer replace the plain staging header and footer.
-liveTheme().then(theme=>{
- if(!theme)return;
- const header=document.querySelector('body>header'),footer=document.querySelector('body>footer');
- const top=document.createElement('div'),bottom=document.createElement('div');
- top.innerHTML=renderThemeHeader(theme,themeMedia());bottom.innerHTML=renderThemeFooter(theme,themeMedia());
- header?.replaceWith(top);footer?.replaceWith(bottom);document.body.classList.add('jt-body');
- activateTheme(document.body,theme.settings);
-});
+import {siteData,mountSite} from './liquid-site.mjs';
 const root=document.getElementById('page-root');
 const message=text=>{root.innerHTML='';const s=document.createElement('section');s.className='store-section';const d=document.createElement('div');d.className='js-rich js-align-center';const h=document.createElement('h1');h.textContent=text;d.append(h);s.append(d);root.append(s);};
 const slug=location.pathname.match(/^\/pages\/([a-z0-9]+(?:-[a-z0-9]+)*)\/?$/)?.[1];
-// Pages built from the theme's Shopify sections (brand story, outlets, policies…). Their CSS and section
-// scripts load as same-site files; the theme's global stylesheet goes before the header/footer styles.
-const load=(tag,attrs)=>new Promise(ok=>{const n=document.createElement(tag);Object.assign(n,attrs);n.onload=n.onerror=()=>ok();(tag==='link'?document.head.querySelector('link[href="/theme.css"]')?.before(n)??document.head.append(n):document.body.append(n));});
-async function themePage(){
- const preview=previewPages();if(preview)return preview[slug]??null;
- const r=await fetch('/api/v3/storefront/theme/pages/'+slug).catch(()=>null);return r?.ok?r.json():null;
+const canonical=path=>{const link=document.createElement('link');link.rel='canonical';link.href=location.origin+path;document.head.append(link);};
+async function show(){
+ if(!slug){message('Page not found');return;}
+ const data=await siteData(slug);
+ if(data){document.title=`${data.title} | Jack Studio`;canonical('/pages/'+slug);await mountSite(data);return;}
+ const r=await fetch('/api/v3/storefront/pages/'+slug);const page=await r.json().catch(()=>({}));
+ if(page.redirect_to){location.replace('/pages/'+encodeURIComponent(page.redirect_to));return;}
+ const frame=await siteData('_frame');
+ if(!r.ok||!page.page){message('Page not found');if(frame)await mountSite(frame,root);return;}
+ const p=page.page;document.title=p.seo_title||`${p.title} | Jack Studio`;
+ document.querySelector('meta[name=description]').setAttribute('content',p.seo_description||'');
+ for(const [k,v] of [['og:title',p.seo_title||p.title],['og:description',p.seo_description||''],['og:type','website']]){const m=document.createElement('meta');m.setAttribute('property',k);m.setAttribute('content',v);document.head.append(m);}
+ canonical('/pages/'+p.slug);root.innerHTML=renderPage(p,{});if(frame)await mountSite(frame,root);
 }
-async function showThemePage(data){
- document.title=`${data.title} | Jack Studio`;
- const link=document.createElement('link');link.rel='canonical';link.href=location.origin+'/pages/'+slug;document.head.append(link);
- await load('link',{rel:'stylesheet',href:'/theme-assets/shopify/jack-studio-1to1.css'});
- root.innerHTML=data.html;root.classList.add('lq-page');document.body.classList.add('lq-body');
- await load('script',{src:'/theme-assets/shopify/runtime.js'});await load('script',{src:'/theme-assets/shopify/jack-studio.js'});
- if(data.scripts?.length)await load('script',{src:'/api/v3/storefront/theme/scripts.js?s='+encodeURIComponent(data.scripts.join(','))});
-}
-if(!slug)message('Page not found');
-else themePage().then(data=>data?showThemePage(data):fetch('/api/v3/storefront/pages/'+slug).then(async r=>{
- const data=await r.json();
- if(data.redirect_to){location.replace('/pages/'+encodeURIComponent(data.redirect_to));return;}
- if(!r.ok||!data.page){message('Page not found');return;}
- const page=data.page;document.title=page.seo_title||`${page.title} | Jack Studio`;
- document.querySelector('meta[name=description]').setAttribute('content',page.seo_description||'');
- for(const [k,v] of [['og:title',page.seo_title||page.title],['og:description',page.seo_description||''],['og:type','website']]){const m=document.createElement('meta');m.setAttribute('property',k);m.setAttribute('content',v);document.head.append(m);}
- const link=document.createElement('link');link.rel='canonical';link.href=location.origin+'/pages/'+page.slug;document.head.append(link);
- root.innerHTML=renderPage(page,{});
-})).catch(()=>message('This page could not be loaded. Please try again.'));
+show().catch(()=>message('This page could not be loaded. Please try again.'));
