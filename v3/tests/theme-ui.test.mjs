@@ -117,10 +117,9 @@ test('pages stay usable when the themes service is unavailable (e.g. before migr
  }finally{ui.destroy();}
 });
 
-test('Preview opens the theme, including unsaved edits, full-size in a new tab',async()=>{
- const {document,window,find,label}=await dom(),fake=fakeApi();
- const {document:popup}=parseHTML('<!doctype html><html><head></head><body></body></html>');let opened=0;
- window.open=()=>{opened++;return {document:popup};};
+test('Preview opens the storefront in preview mode with the theme, including unsaved edits',async()=>{
+ const {document,window,find,label}=await dom(),fake=fakeApi(),store=new Map();let opened=null;
+ window.localStorage={setItem:(k,v)=>store.set(k,v),getItem:k=>store.get(k)??null};window.open=url=>{opened=url;return {};};
  const ui=mountAdmin(fake.api,'editor',()=>{});
  try{
   document.querySelector('[data-view="Website"]').click();await settle();
@@ -129,8 +128,9 @@ test('Preview opens the theme, including unsaved edits, full-size in a new tab',
   const heading=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Heading'));
   heading.querySelector('input').value='Preview me';heading.querySelector('input').dispatchEvent(new window.Event('input'));
   find('Preview').click();await settle(80);
-  assert.equal(opened,1);const f=popup.querySelector('iframe');
-  assert.equal(f.getAttribute('sandbox'),'','sandboxed, no scripts');assert.ok(f.srcdoc.includes('Preview me'),'unsaved edits are shown');
-  assert.match(popup.title,/unsaved changes/);
- }finally{ui.destroy();delete window.open;}
+  assert.equal(opened,'/?theme_preview=1');
+  const saved=JSON.parse(store.get('jt-theme-preview'));
+  assert.equal(saved.theme.sections.find(s=>s.type==='hero_banner').settings.heading,'Preview me','unsaved edits are previewed');
+  assert.match(saved.name,/unsaved changes/);assert.ok(saved.expires>Date.now());assert.deepEqual(saved.media,{},'only Cloudinary preview URLs are handed over');
+ }finally{ui.destroy();delete window.open;delete window.localStorage;}
 });

@@ -1,13 +1,13 @@
 // Public page shell: shows only published content from the read-only storefront API.
 import {renderPage} from '../admin/page-render.mjs';
 import {renderThemeHeader,renderThemeFooter} from '../admin/theme-render.mjs';
-import {activateTheme,liveTheme} from './theme-behaviour.mjs';
+import {activateTheme,liveTheme,themeMedia} from './theme-behaviour.mjs';
 // With a live Online Store theme, its header and footer replace the plain staging header and footer.
 liveTheme().then(theme=>{
  if(!theme)return;
  const header=document.querySelector('body>header'),footer=document.querySelector('body>footer');
  const top=document.createElement('div'),bottom=document.createElement('div');
- top.innerHTML=renderThemeHeader(theme,{});bottom.innerHTML=renderThemeFooter(theme,{});
+ top.innerHTML=renderThemeHeader(theme,themeMedia());bottom.innerHTML=renderThemeFooter(theme,themeMedia());
  header?.replaceWith(top);footer?.replaceWith(bottom);document.body.classList.add('jt-body');
  activateTheme(document.body,theme.settings);
 });
