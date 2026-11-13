@@ -193,6 +193,14 @@ button.jh-nav-link{background:none;border:0;margin:0;font-family:inherit;line-he
 .vs-play{width:70px;height:70px;border-radius:50%;background:rgba(255,255,255,.92);color:#2b2420;display:flex;align-items:center;justify-content:center;box-shadow:0 6px 24px rgba(43,36,32,.25)}
 .vs-cta-label{font-family:var(--jt-heading-font);font-size:28px;letter-spacing:1.5px;text-shadow:0 2px 12px rgba(43,36,32,.4)}
 .vs-cta-hint{font-size:12px;opacity:.9}
+/* Embedded 3D showroom: the cover shows until the showroom has loaded, then fades out. */
+.vs-frame{position:absolute;inset:0;width:100%;height:100%;border:0;display:block;opacity:0;transition:opacity .5s}
+.vs-stage .vs-cover-img,.vs-stage .vs-shade{transition:opacity .5s}
+.vs-stage.is-live .vs-frame{opacity:1}
+.vs-stage.is-live .vs-cover-img,.vs-stage.is-live .vs-shade{opacity:0;pointer-events:none}
+.vs-loading{display:none;position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:#fff;font-size:12px;letter-spacing:1.5px;text-transform:uppercase;background:rgba(41,39,36,.6);padding:10px 16px}
+.vs-stage.is-loading .vs-loading{display:block}
+.vs-hint{text-align:center;font-size:12px;color:var(--jt-muted);margin:12px 20px 0}
 
 /* Outlets */
 .ot-wrap{padding:48px 24px;text-align:center;background:var(--ot-bg,#e9e2d5);color:var(--jt-heading)}

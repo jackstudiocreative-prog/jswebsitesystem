@@ -60,7 +60,23 @@ function flaps(root){
 function newsletter(root){
  for(const form of root.querySelectorAll('[data-jt-newsletter]'))form.addEventListener('submit',e=>{e.preventDefault();const note=form.parentElement.querySelector('[data-jt-newsletter-note]');if(note){note.textContent='Newsletter sign-up is not connected yet. Please check back soon.';note.hidden=false;}});
 }
-export function activateTheme(root,settings){applyThemeVars(root,settings);announcements(root);menus(root);carousels(root);tabs(root);flaps(root);newsletter(root);}
+// 3D showroom shown in the page (no new page). It starts loading well before visitors reach it (two
+// screens ahead, or as soon as the rest of the page has loaded), so it is usually ready on arrival.
+function showrooms(root){
+ for(const stage of root.querySelectorAll('[data-showroom]')){
+  let started=false;
+  const load=()=>{if(started)return;started=true;io?.disconnect();stage.classList.add('is-loading');
+   const f=document.createElement('iframe');f.className='vs-frame';f.src=stage.dataset.showroom;f.title='Jack Studio virtual showroom';
+   f.allow='fullscreen; accelerometer; gyroscope; xr-spatial-tracking';f.setAttribute('allowfullscreen','');
+   f.addEventListener('load',()=>{stage.classList.remove('is-loading');stage.classList.add('is-live');try{const r=stage.getBoundingClientRect();f.contentWindow.vsPaused=r.bottom<0||r.top>innerHeight;}catch{}});stage.prepend(f);};
+  const io='IntersectionObserver' in window?new IntersectionObserver(e=>{if(e.some(x=>x.isIntersecting))load();},{rootMargin:'200% 0px'}):null;
+  // Pause the 3D render loop while the showroom is off screen; resume when it comes back.
+  if('IntersectionObserver' in window)new IntersectionObserver(e=>{const w=stage.querySelector('.vs-frame')?.contentWindow;if(!w)return;try{const on=e.at(-1).isIntersecting;w.vsPaused=!on;if(on)w.vsResume?.();}catch{}}).observe(stage);
+  if(io)io.observe(stage);else load();
+  const later=()=>(window.requestIdleCallback??(fn=>setTimeout(fn,1000)))(load,{timeout:2000});if(document.readyState==='complete')later();else window.addEventListener('load',later,{once:true});
+ }
+}
+export function activateTheme(root,settings){applyThemeVars(root,settings);announcements(root);menus(root);carousels(root);tabs(root);flaps(root);newsletter(root);showrooms(root);}
 // Theme preview from the admin (Preview button): the admin stores the theme in this browser and opens
 // /?theme_preview=1; the flag lives in this tab's session so every page in the tab keeps previewing.
 const PREVIEW='jt-theme-preview';
