@@ -116,3 +116,21 @@ test('pages stay usable when the themes service is unavailable (e.g. before migr
   assert.match(text,/Themes are unavailable right now/);assert.match(text,/Create a page/);
  }finally{ui.destroy();}
 });
+
+test('Preview opens the theme, including unsaved edits, full-size in a new tab',async()=>{
+ const {document,window,find,label}=await dom(),fake=fakeApi();
+ const {document:popup}=parseHTML('<!doctype html><html><head></head><body></body></html>');let opened=0;
+ window.open=()=>{opened++;return {document:popup};};
+ const ui=mountAdmin(fake.api,'editor',()=>{});
+ try{
+  document.querySelector('[data-view="Website"]').click();await settle();
+  find('Edit theme').click();await settle(60);
+  label('Edit Hero banner').click();await settle();
+  const heading=[...document.querySelectorAll('.theme-form label')].find(l=>l.textContent.startsWith('Heading'));
+  heading.querySelector('input').value='Preview me';heading.querySelector('input').dispatchEvent(new window.Event('input'));
+  find('Preview').click();await settle(80);
+  assert.equal(opened,1);const f=popup.querySelector('iframe');
+  assert.equal(f.getAttribute('sandbox'),'','sandboxed, no scripts');assert.ok(f.srcdoc.includes('Preview me'),'unsaved edits are shown');
+  assert.match(popup.title,/unsaved changes/);
+ }finally{ui.destroy();delete window.open;}
+});

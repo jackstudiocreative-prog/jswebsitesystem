@@ -18,6 +18,14 @@ export function createThemes(h){
   if(typeof window!=='undefined')window.addEventListener('resize',fit);
   return {stage,show:data=>{frame.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());fit();},setWidth:w=>{width=w;fit();},fit,destroy:()=>typeof window!=='undefined'&&window.removeEventListener('resize',fit)};
  }
+ // Full-page preview in a new tab: a top bar plus the same sandboxed frame (no scripts, links disabled).
+ function openPreview(data,title){
+  if(typeof window==='undefined'||!window.open)return;const w=window.open('','_blank');if(!w){notify('Allow pop-ups for this site to open the preview.');return;}
+  const d=w.document;d.title='Preview · '+title;d.body.style.cssText='margin:0;font:13px Inter,system-ui,sans-serif;background:#f4f5f3';
+  const bar=d.createElement('div');bar.style.cssText='position:fixed;inset:0 0 auto 0;height:40px;display:flex;align-items:center;gap:8px;padding:0 16px;background:#1d2a22;color:#fff';bar.textContent='Preview · '+title+' — links are disabled; close this tab to return to the editor.';
+  const f=d.createElement('iframe');f.setAttribute('sandbox','');f.setAttribute('title','Theme preview: '+title);f.setAttribute('referrerpolicy','no-referrer');f.style.cssText='position:fixed;top:40px;left:0;width:100%;height:calc(100% - 40px);border:0;background:#fff';
+  f.srcdoc=themeDocument(data.theme,safeMedia(data.media),origin());d.body.append(bar,f);
+ }
  const confirmed=text=>typeof window==='undefined'||window.confirm(text);
  async function rename(theme){
   const next=typeof window!=='undefined'?window.prompt('Theme name',theme.name):null;if(next==null||next.trim()===theme.name)return;
@@ -46,7 +54,7 @@ export function createThemes(h){
    info.append(el('h3',live.name),el('p',`Last saved ${when(live.updated_at)}`,'muted'),el('p',`Published ${when(live.published_at)}`,'muted'));
    const actions=el('div',undefined,'actions'),edit=button(readOnly?'View theme':'Edit theme',()=>editTheme(live.id));edit.classList.add('primary');
    const view=el('a','View store','button-link');view.href='/';view.target='_blank';view.rel='noopener';
-   actions.append(edit,view,button('Duplicate',()=>duplicate(live),readOnly||data.items.length>=max),button('Rename',()=>rename(live),readOnly),button('Auto-fill images',()=>autofill(live),readOnly));info.append(actions);
+   actions.append(edit,view,button('Preview',async()=>openPreview(await api(`themes/${live.id}/preview`),live.name)),button('Duplicate',()=>duplicate(live),readOnly||data.items.length>=max),button('Rename',()=>rename(live),readOnly),button('Auto-fill images',()=>autofill(live),readOnly));info.append(actions);
    grid.append(frame.stage,info);cur.append(grid);
    api(`themes/${live.id}/preview`).then(p=>{if(current(t))frame.show(p);}).catch(err=>{frame.stage.replaceWith(el('p','Preview unavailable: '+err.message,'muted'));});
   }
@@ -56,7 +64,7 @@ export function createThemes(h){
   for(const theme of library){
    const row=el('div',undefined,'theme-row'),copy=el('div');copy.append(el('strong',theme.name),el('span',`Last saved ${when(theme.updated_at)}`,'muted'));
    const tools=el('div',undefined,'row-actions'),pub=button('Publish',()=>publish(theme),readOnly);pub.classList.add('primary');
-   tools.append(pub,button(readOnly?'View':'Edit theme',()=>editTheme(theme.id)),button('Duplicate',()=>duplicate(theme),readOnly||data.items.length>=max),button('Rename',()=>rename(theme),readOnly),button('Auto-fill images',()=>autofill(theme),readOnly),
+   tools.append(pub,button(readOnly?'View':'Edit theme',()=>editTheme(theme.id)),button('Preview',async()=>openPreview(await api(`themes/${theme.id}/preview`),theme.name)),button('Duplicate',()=>duplicate(theme),readOnly||data.items.length>=max),button('Rename',()=>rename(theme),readOnly),button('Auto-fill images',()=>autofill(theme),readOnly),
     button('Remove',async()=>{if(!confirmed(`Remove "${theme.name}" from the theme library?`))return;await api(`themes/${theme.id}/archive`,{revision:theme.revision},'POST');notify('Theme removed.');await navigate('Website');},readOnly));
    row.append(copy,tools);lib.append(row);
   }
@@ -77,7 +85,9 @@ export function createThemes(h){
   const frame=previewFrame(`Theme preview: ${theme.name}`);
   for(const [k,label,width] of DEVICES){const n=button(`${label} · ${width}px`,()=>{device=k;for(const b of devices.children)b.setAttribute('aria-pressed',String(b===n));frame.setWidth(width);});n.setAttribute('aria-pressed',String(k===device));devices.append(n);}
   const save=button('Save',async()=>{await persist();notify(theme.is_live?'Theme saved. The storefront is updated.':'Theme saved.');},readOnly);save.classList.add('primary');
-  const actions=el('div',undefined,'actions');actions.append(save);
+  let last=null;
+  const preview=button('Preview',async()=>{if(!readOnly&&dirty)await refresh();if(!last)await refresh();if(last)openPreview(last,theme.name+(dirty?' (unsaved changes)':''));});
+  const actions=el('div',undefined,'actions');actions.append(preview,save);
   if(!theme.is_live)actions.append(button(dirty?'Save and publish':'Publish',async()=>{if(!confirmed(`Publish "${theme.name}"? It replaces the current theme on the storefront.`))return;if(dirty)await persist();await api(`themes/${id}/publish`,{revision:theme.revision},'POST');dirty=false;setDirty(false);notify(`${theme.name} is now live.`);await navigate('Website');},readOnly));
   actions.append(button('Back to Online Store',()=>navigate('Website')));
   bar.append(devices,actions);root.append(bar);
@@ -87,7 +97,7 @@ export function createThemes(h){
   function schedule(){if(readOnly)return;clearTimeout(timer);timer=setTimeout(()=>refresh(),600);}
   async function refresh(){
    note.textContent='Updating preview…';
-   try{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!current(t))return;frame.show(data);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
+   try{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!current(t))return;last=data;frame.show(data);note.textContent=readOnly?'Showing the saved theme.':dirty?'Showing your unsaved changes. Save to keep them.':'Showing the saved theme.';}
    catch(err){note.textContent='Preview not updated: '+err.message;}
   }
   // Panel, laid out like Shopify's editor: a compact section tree (icon, name, eye toggle, ··· menu)
