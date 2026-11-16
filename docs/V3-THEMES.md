@@ -154,3 +154,17 @@ bar); the earlier hand-built home sections (`content.header/sections/footer`) ar
 no longer shown. Shopify-hosted videos play from Shopify's video CDN (`media-src https://cdn.shopify.com`)
 until they are moved. Section heights were checked against jackstudio.com.my at 1521px: all match except
 sections that need catalog data (best sellers, series shelves) and the service-page video.
+
+## Shopify catalogue import
+
+Products → **Import products from Shopify** copies the published catalogue of jackstudio.com.my into V3,
+reading the store's public JSON (`/collections.json`, `/products.json`, `/collections/<handle>/products.json`;
+no Shopify token). Steps run one request at a time (`POST /api/v3/catalog/import` with
+`{step:'collections'}`, `{step:'products',page}`, `{step:'memberships',handle}`; editors only):
+collections, products (6 per step, with variants, prices, compare-at prices, tags, description without
+scripts and up to 20 images, imported into the private media library when missing), then each
+collection's products. Re-running updates instead of duplicating; variants removed in Shopify are switched
+off; duplicate Shopify SKUs are left empty. Stock comes from a dated snapshot (`src/shopify-stock.mjs`,
+16 Nov 2026) and is only used for newly created variants; V3's stock ledger is the record afterwards.
+Needs migration `010_product_tags.sql` (`products.tags`, `product_variants.compare_at_minor`). The theme's
+series shelves (tags `cat-bag`, `cat-wallet`, …) and Best Seller tabs read these products.

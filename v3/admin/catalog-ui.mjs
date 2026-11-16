@@ -26,6 +26,33 @@ export function mountAdmin(api,role,notify){
    notify(i.stop?'Shopify import paused. Start it again to continue.':i.failed.length?`Shopify import finished. ${i.failed.length} images could not be imported (see the list in the Media Library).`:'Shopify import finished. All images are in the Media Library.');
   }finally{i.running=false;if(view==='Media Library')navigate('Media Library');}
  }
+ // Shopify catalogue import: collections, then products page by page (with their images), then which
+ // products belong to each collection. Safe to run again: it updates instead of duplicating.
+ const catalogRun={running:false,stop:false,line:null,failed:[],counts:{imported:0,updated:0}};
+ async function runCatalog(){
+  const c=catalogRun;if(c.running)return;c.running=true;c.stop=false;c.failed=[];c.counts={imported:0,updated:0};
+  const say=t=>{if(c.line?.isConnected)c.line.textContent=t;};
+  try{
+   say('Importing collections…');const cols=await api('catalog/import',{step:'collections'},'POST');c.failed.push(...cols.items.filter(i=>i.status==='failed'));
+   for(let page=1;!c.stop;page++){
+    const r=await api('catalog/import',{step:'products',page},'POST');
+    for(const i of r.items){if(i.status==='failed'||i.status==='skipped')c.failed.push(i);else c.counts[i.status]++;}
+    say(`Importing products… ${c.counts.imported} new · ${c.counts.updated} updated${c.failed.length?` · ${c.failed.length} not imported`:''}`);
+    if(r.done)break;
+   }
+   for(const handle of cols.handles){if(c.stop)break;say(`Linking products to collection ${handle}…`);await api('catalog/import',{step:'memberships',handle},'POST');}
+   notify(c.stop?'Catalogue import paused. Start it again to continue.':`Catalogue import finished: ${c.counts.imported} new and ${c.counts.updated} updated products${c.failed.length?`, ${c.failed.length} not imported`:''}.`);
+  }finally{c.running=false;if(view==='Products')navigate('Products');}
+ }
+ function catalogCard(){
+  const box=el('section',undefined,'card shopify-import');box.append(el('h2','Import from Shopify'),el('p','Copies the published products of jackstudio.com.my (with variants, prices, tags and images) and its collections into this catalogue. Stock is taken from Shopify on 16 Nov 2026 for new variants only. Running it again updates existing products.','muted'));
+  catalogRun.line=el('p',catalogRun.running?'Importing…':'','shopify-import-status');catalogRun.line.setAttribute('role','status');box.append(catalogRun.line);
+  const stop=button('Pause',()=>{catalogRun.stop=true;stop.textContent='Pausing…';},true);stop.disabled=readOnly||!catalogRun.running;
+  const start=button(catalogRun.running?'Importing…':'Import products from Shopify',async()=>{const run=runCatalog();start.textContent='Importing…';stop.disabled=false;await run;},readOnly||catalogRun.running);start.classList.add('primary');
+  const actions=el('div',undefined,'actions');actions.append(start,stop);box.append(actions);
+  if(catalogRun.failed.length){const d=el('details');d.append(el('summary',`${catalogRun.failed.length} products or collections were not imported`));const ul=el('ul');for(const f of catalogRun.failed.slice(0,60))ul.append(el('li',`${f.handle} — ${f.error}`));d.append(ul);box.append(d);}
+  return box;
+ }
  function importCard(){
   const box=el('section',undefined,'card shopify-import');box.append(el('h2','Import from Shopify'),el('p','Copies the Shopify image library (product, collection and theme images) into this private media library. Theme image slots fill automatically from these images.','muted'));
   importer.line=el('p',importer.total?importLine():'Checking what is left to import…','shopify-import-status');importer.line.setAttribute('role','status');box.append(importer.line);
@@ -245,6 +272,7 @@ export function mountAdmin(api,role,notify){
   if(resource==='products'){const collections=await all('collections');if(ticket!==generation)return;const choose=select([['','All collections'],...collections.map(c=>[String(c.id),c.title])],collection);choose.setAttribute('aria-label','Filter by collection');tools.insertBefore(choose,find);choose.addEventListener('change',()=>{collection=choose.value;});}
   if(resource!=='media')tools.append(button('Add '+(resource==='products'?'product':'collection'),()=>resource==='products'?editProduct():editCollection(),readOnly));
   if(resource==='media')root.append(importCard());
+  if(resource==='products')root.append(catalogCard());
   root.append(el('p',`${data.total} records · Showing ${data.items.length?offset+1:0}–${offset+data.items.length}`,'muted'));
   if(!data.items.length)empty(search||status?'No matching records. Adjust your filters.':'Your collection starts here. Add your first record.');
   else if(resource==='media'){const grid=el('div',undefined,'media-grid');root.append(grid);const shots=[];for(const m of data.items){const box=el('article',undefined,'card media-card'),name=m.label||m.object_key.split('/').pop();if(m.state==='ready'){const frame=el('div',undefined,'media-thumb'),img=thumb(name);frame.append(img);box.append(frame);shots.push({id:m.id,img});}box.append(el('strong',name,'media-label'),el('small',`${m.width??'?'} × ${m.height??'?'} · ${m.bytes>=1e6?(m.bytes/1e6).toFixed(1)+' MB':Math.max(1,Math.round(m.bytes/1e3))+' KB'} · ${m.state}`));grid.append(box);}previews(shots);root.append(el('p','Images load as private previews that expire after five minutes; use Refresh data to reload them. Link images from the product editor.','muted'));}
@@ -254,5 +282,5 @@ export function mountAdmin(api,role,notify){
  async function navigate(next,keep=false){if(!keep&&next==='Orders')sales?.resetOrders();if(dirty&&!window.confirm('Discard unsaved edits?'))return;dirty=false;view=next;offset=0;search='';status='';collection='';inventoryFilter='';for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');}for(const g of document.querySelectorAll('.nav-group'))g.classList.toggle('open',!!g.querySelector('[data-view].active'));await render();}
  const navigation=[...document.querySelectorAll('[data-view]')].map(b=>{const fn=()=>navigate(b.dataset.view).catch(e=>notify(e.message));b.addEventListener('click',fn);return [b,fn];});
  const unload=e=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
- return {reload:()=>navigate(view),destroy(){importer.stop=true;for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};
+ return {reload:()=>navigate(view),destroy(){importer.stop=true;catalogRun.stop=true;for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};
 }
