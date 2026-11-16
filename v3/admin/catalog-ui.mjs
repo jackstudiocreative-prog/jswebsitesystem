@@ -49,7 +49,15 @@ export function mountAdmin(api,role,notify){
   catalogRun.line=el('p',catalogRun.running?'Importing…':'','shopify-import-status');catalogRun.line.setAttribute('role','status');box.append(catalogRun.line);
   const stop=button('Pause',()=>{catalogRun.stop=true;stop.textContent='Pausing…';},true);stop.disabled=readOnly||!catalogRun.running;
   const start=button(catalogRun.running?'Importing…':'Import products from Shopify',async()=>{const run=runCatalog();start.textContent='Importing…';stop.disabled=false;await run;},readOnly||catalogRun.running);start.classList.add('primary');
-  const actions=el('div',undefined,'actions');actions.append(start,stop);box.append(actions);
+  const report=el('div',undefined,'catalog-check');
+  const check=button('Check against Shopify',async()=>{report.replaceChildren(el('p','Comparing every product with jackstudio.com.my…','muted'));const r=await api('catalog/import',{step:'verify'},'POST');
+   const ok=r.matched===r.shopify&&!r.issues.length;
+   report.replaceChildren(el('p',`${r.matched} of ${r.shopify} Shopify products match exactly in V3${r.extra.length?` · ${r.extra.length} active V3 products are not in Shopify`:''}.`,ok?'':'muted'));
+   const t=el('ul');for(const c of r.collections)t.append(el('li',`${c.handle}: Shopify ${c.shopify} products, V3 ${c.v3??'missing'}`));const d1=el('details');d1.append(el('summary','Collections'),t);report.append(d1);
+   if(r.issues.length){const d=el('details');d.open=true;d.append(el('summary',`${r.issues.length} differences`));const ul=el('ul');for(const i of r.issues)ul.append(el('li',`${i.handle} — ${i.problem}`));d.append(ul);report.append(d);}
+   if(r.extra.length){const d=el('details');d.append(el('summary','In V3 but not in Shopify'));const ul=el('ul');for(const h of r.extra.slice(0,100))ul.append(el('li',h));d.append(ul);report.append(d);}
+  });
+  const actions=el('div',undefined,'actions');actions.append(start,stop,check);box.append(actions,report);
   if(catalogRun.failed.length){const d=el('details');d.append(el('summary',`${catalogRun.failed.length} products or collections were not imported`));const ul=el('ul');for(const f of catalogRun.failed.slice(0,60))ul.append(el('li',`${f.handle} — ${f.error}`));d.append(ul);box.append(d);}
   return box;
  }
