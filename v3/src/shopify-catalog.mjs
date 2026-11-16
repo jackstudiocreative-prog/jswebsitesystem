@@ -92,5 +92,48 @@ export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson){
   await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES($1,'import','collections',$2)",[actor,c.id]);
   return {step,handle,linked:ids.length,missing:handles.length-ids.length};
  }
+ if(step==='verify')return verifyCatalog(db,fetchJson);
  bad('Unknown import step');
+}
+
+// Compares the V3 catalogue with the live Shopify store, field by field, and lists every difference.
+export async function verifyCatalog(db,fetchJson=storeJson){
+ const shop=[];for(let page=1;page<=20;page++){const list=(await fetchJson(`/products.json?limit=250&page=${page}`)).products??[];shop.push(...list);if(list.length<250)break;}
+ const cols=(await fetchJson('/collections.json?limit=250')).collections??[];
+ const issues=[],add=(handle,problem)=>{if(issues.length<300)issues.push({handle,problem});};
+ const rows=(await db.query(`SELECT p.id,p.handle,p.title,p.status,p.description,p.option_names,coalesce(to_jsonb(p)->'tags','[]'::jsonb) AS tags,
+   (SELECT count(*)::int FROM product_media pm WHERE pm.product_id=p.id) AS images FROM products p`)).rows;
+ const byHandle=new Map(rows.map(r=>[r.handle,r]));
+ const variants=new Map();for(const v of (await db.query("SELECT product_id,option_values,sku,price_minor,coalesce((to_jsonb(v)->>'compare_at_minor')::int,-1) AS compare_at,active FROM product_variants v")).rows){const k=String(v.product_id);if(!variants.has(k))variants.set(k,[]);variants.get(k).push(v);}
+ let matched=0;
+ for(const p of shop){
+  const r=byHandle.get(p.handle);if(!r){add(p.handle,'Missing in V3');continue;}
+  let ok=true;const fail=m=>{ok=false;add(p.handle,m);};
+  if(r.title!==String(p.title).slice(0,150))fail('Title differs');
+  if(r.status!=='active')fail(`Status is ${r.status}`);
+  if(r.description!==cleanHtml(p.body_html??'',20000))fail('Description differs');
+  const tags=(Array.isArray(p.tags)?p.tags:String(p.tags??'').split(',')).map(t=>String(t).trim()).filter(Boolean);
+  if(JSON.stringify([...new Set(tags)].sort())!==JSON.stringify([...(r.tags??[])].sort()))fail('Tags differ');
+  const names=(p.options??[]).map(o=>o.name).filter(n=>n&&!(n==='Title'&&p.options.length===1&&p.variants?.length===1)).slice(0,3);
+  if(JSON.stringify(names)!==JSON.stringify(r.option_names))fail('Options differ');
+  const images=(p.images??[]).filter(i=>SHOPIFY_PATH.test(cdnPath(i.src)??'')).length;
+  if(Math.min(images,20)!==r.images)fail(`Images: Shopify ${images}, V3 ${r.images}`);
+  const vs=(variants.get(String(r.id))??[]).filter(v=>v.active);
+  if(vs.length!==(p.variants??[]).length)fail(`Variants: Shopify ${(p.variants??[]).length}, V3 ${vs.length}`);
+  for(const sv of p.variants??[]){
+   const values=names.map((_,k)=>String(sv['option'+(k+1)]??'').trim().slice(0,60)||'-');
+   const v=vs.find(x=>JSON.stringify(x.option_values)===JSON.stringify(values));if(!v){fail(`Variant ${values.join(' / ')||'default'} missing`);continue;}
+   if(v.price_minor!==minor(sv.price))fail(`Price of ${values.join(' / ')||'default'} differs`);
+   const cmp=minor(sv.compare_at_price)>minor(sv.price)?minor(sv.compare_at_price):-1;if(v.compare_at!==cmp)fail(`Compare-at price of ${values.join(' / ')||'default'} differs`);
+   if(sv.sku&&v.sku!==String(sv.sku).trim().slice(0,80))fail(`SKU ${sv.sku} left empty or different (duplicate in Shopify?)`);
+  }
+  if(ok)matched++;
+ }
+ const shopHandles=new Set(shop.map(p=>p.handle));
+ const extra=rows.filter(r=>r.status==='active'&&!shopHandles.has(r.handle)).map(r=>r.handle);
+ const colRows=new Map((await db.query('SELECT c.slug,c.status,(SELECT count(*)::int FROM product_collections pc WHERE pc.collection_id=c.id) AS n FROM collections c')).rows.map(c=>[c.slug,c]));
+ const collections=[];
+ for(const c of cols){if(!SLUG.test(c.handle??'')){add(c.handle,'Collection address not usable in V3');continue;}const v=colRows.get(c.handle);let n=0;for(let page=1;page<=20;page++){const list=(await fetchJson(`/collections/${c.handle}/products.json?limit=250&page=${page}`)).products??[];n+=list.length;if(list.length<250)break;}
+  collections.push({handle:c.handle,shopify:n,v3:v?.n??null});if(!v)add(c.handle,'Collection missing in V3');else if(v.n!==n)add(c.handle,`Collection products: Shopify ${n}, V3 ${v.n}`);}
+ return {step:'verify',shopify:shop.length,v3:rows.length,matched,extra,collections,issues};
 }

@@ -61,6 +61,13 @@ test('catalogue import: collections, products with variants, tags, prices, image
   const after=(await h.db.query("SELECT v.option_values,v.price_minor,v.active,v.inventory FROM product_variants v JOIN products p ON p.id=v.product_id WHERE p.handle='urban-sling' ORDER BY v.position")).rows;
   assert.deepEqual(after.map(v=>[v.option_values[0],v.price_minor,v.active,v.inventory]),[['Black',17900,true,37],['Brown',19900,false,29]]);
   assert.equal(h.uploads.length,3,'images are imported once');
+  // Verification compares every field with the store and lists differences.
+  await h.db.query('SET ROLE jackstudio_api');
+  const v=(await h.post({step:'verify'})).body;
+  assert.equal(v.shopify,3);assert.equal(v.matched,1,'urban-sling matches after the update');
+  assert.ok(v.issues.some(i=>i.handle==='Bad Handle'&&/Missing/.test(i.problem)));assert.ok(v.issues.some(i=>i.handle==='card-holder'&&/SKU/.test(i.problem)));
+  assert.deepEqual(v.collections,[{handle:'urban-carry',shopify:3,v3:2}]);assert.ok(v.issues.some(i=>i.handle==='bad handle'));
+  await h.db.query('RESET ROLE');
   // The theme's series shelves and best sellers see the products by collection and tag.
   const page=await renderPage(h.sql,'product-collection',PAGE_TEMPLATES['product-collection']);
   assert.match(page.html,/Urban Sling/);
