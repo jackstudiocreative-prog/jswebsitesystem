@@ -39,6 +39,8 @@ test('catalogue import: collections, products with variants, tags, prices, image
  try{
   assert.equal((await h.post({step:'collections'},'viewer')).status,403);
   const cols=await h.post({step:'collections'});assert.equal(cols.status,200);assert.deepEqual(cols.body.handles,['urban-carry']);assert.equal(cols.body.items[1].status,'skipped');
+  const im=await h.post({step:'images',page:1});assert.equal(im.status,200);assert.equal(im.body.imported,3);assert.equal(im.body.remaining,0);
+  assert.equal((await h.post({step:'images',page:1})).body.imported,0,'images already in the library are not fetched again');
   let r=await h.post({step:'products',page:1});assert.equal(r.status,200);assert.equal(r.body.done,true);
   const by=Object.fromEntries(r.body.items.map(i=>[i.handle,i]));
   assert.equal(by['urban-sling'].status,'imported');assert.equal(by['card-holder'].status,'imported');assert.equal(by['Bad Handle'].status,'skipped');

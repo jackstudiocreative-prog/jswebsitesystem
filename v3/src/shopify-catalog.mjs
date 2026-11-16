@@ -77,9 +77,24 @@ export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson){
  if(step==='products'){
   const page=Number(input.page);if(!Number.isInteger(page)||page<1||page>200)bad('Invalid page');
   const list=(await fetchJson(`/products.json?limit=${PRODUCTS_PER_STEP}&page=${page}`)).products??[];const items=[];
-  const deadline=Date.now()+18000;
+  const deadline=0; // images are imported by the 'images' step first; this step only links them
   for(const p of list){await db.query('SAVEPOINT p');try{items.push(await upsertProduct(db,actor,p,cloud,deadline));await db.query('RELEASE SAVEPOINT p');}catch(e){await db.query('ROLLBACK TO SAVEPOINT p');items.push({handle:p.handle,status:'failed',error:e.message});}}
   return {step,page,items,done:list.length<PRODUCTS_PER_STEP};
+ }
+ // Missing product images of one page, at most 4 per request in parallel (each request stays short).
+ if(step==='images'){
+  const page=Number(input.page);if(!Number.isInteger(page)||page<1||page>200)bad('Invalid page');
+  const list=(await fetchJson(`/products.json?limit=${PRODUCTS_PER_STEP}&page=${page}`)).products??[];
+  const paths=[...new Set(list.flatMap(p=>(p.images??[]).slice(0,20).map(i=>cdnPath(i.src))).filter(x=>x&&SHOPIFY_PATH.test(x)))];
+  const have=new Set((await db.query("SELECT object_key FROM media WHERE state='ready' AND object_key = ANY($1::text[])",[paths.map(shopifyKey)])).rows.map(r=>r.object_key));
+  const missing=paths.filter(x=>!have.has(shopifyKey(x))),skip=new Set((input.skip??[]).map(String)),todo=missing.filter(x=>!skip.has(x)).slice(0,4);
+  const results=await Promise.all(todo.map(path=>cloud.importRemote(SHOPIFY_CDN+path,shopifyKey(path)).then(asset=>({path,asset}),error=>({path,error}))));
+  const failed=[];
+  for(const {path,asset,error} of results){
+   if(error){failed.push({handle:path,error:'Cloudinary could not import this image'});continue;}
+   await db.query('SAVEPOINT i');try{await mediaForPath(db,actor,path,{importRemote:async()=>asset});await db.query('RELEASE SAVEPOINT i');}catch(e){await db.query('ROLLBACK TO SAVEPOINT i');failed.push({handle:path,error:e.message});}
+  }
+  return {step,page,imported:todo.length-failed.length,failed,remaining:missing.length-todo.length};
  }
  if(step==='memberships'){
   const handle=String(input.handle??'');if(!SLUG.test(handle))bad('Invalid collection');
