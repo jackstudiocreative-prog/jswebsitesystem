@@ -1,5 +1,6 @@
 import { cloudAdapter,signUpload,finalizeUpload,previews } from './media.mjs';
 import { importStatus,importShopify } from './shopify-import.mjs';
+import { importCatalog } from './shopify-catalog.mjs';
 import { authorize,HttpError } from './auth.mjs';
 import { list,save,detail,dashboard } from './catalog.mjs';
 import { adjust,inventoryList,adjustmentList } from './inventory.mjs';
@@ -105,9 +106,12 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   if(theme&&!(themeAction==='draft-preview'||themeAction==='pages-preview'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
   // Shopify image import: GET lists what is still to import, POST imports one small batch.
   const mediaImport=path==='/api/v3/media/import';
+  // Shopify catalogue import (collections, products, memberships), one step per POST.
+  const catalogImport=path==='/api/v3/catalog/import';
+  if(catalogImport&&req.method!=='POST')throw new HttpError(405,'Method not available');
   if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
-  const match=page||sales||theme||mediaImport?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
-  if(!match&&!page&&!sales&&!theme&&!mediaImport)throw new HttpError(404,'Not found');
+  const match=page||sales||theme||mediaImport||catalogImport?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
+  if(!match&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport)throw new HttpError(404,'Not found');
   if(match){
   if((['media/previews','inventory'].includes(match[1])&&(req.method!=='GET'||match[2]))||(match[1]==='inventory/adjustments'&&(!['GET','POST'].includes(req.method)||match[2])))throw new HttpError(405,'Method not available');
   if(!['GET','POST','PATCH'].includes(req.method) || (['media','session','dashboard'].includes(match[1])&&req.method!=='GET') || (match[1].startsWith('uploads/')&&(req.method!=='POST'||match[2])) || (req.method==='PATCH'&&!match[2]) || (req.method==='POST'&&match[2]) || (match[2]&&['session','dashboard'].includes(match[1])) || (match[3]&&match[1]!=='media') || (match[1]==='media'&&match[2]&&!match[3]))throw new HttpError(405,'Method not available');
@@ -135,6 +139,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
    else if(theme){result=themeAction==='pages-preview'?await previewThemePages(db,input,options.cloud??cloudAdapter()):themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'||themeAction==='pages-preview'?200:201;}
    else if(mediaImport)result=await importShopify(db,claims.sub,input,options.cloud??cloudAdapter());
+   else if(catalogImport)result=await importCatalog(db,claims.sub,input,options.cloud??cloudAdapter(),options.storeJson);
    else if(page){result=action==='draft-preview'?await previewDraft(db,input,options.cloud??cloudAdapter()):!page[2]?await createPage(db,input,claims.sub):!action?await savePage(db,page[2],input,claims.sub):action==='publish'?await publishPage(db,page[2],input,claims.sub):action==='unpublish'?await unpublishPage(db,page[2],input,claims.sub):await restoreRevision(db,page[2],page[4],input,claims.sub);res.statusCode=page[2]||action==='draft-preview'?200:201;}
    else{
    const cloud=match[1].startsWith('uploads/')?(options.cloud??cloudAdapter()):null;

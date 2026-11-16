@@ -45,6 +45,20 @@ export async function importShopify(db,actor,input,cloud){
  return {items};
 }
 
+// One Shopify CDN image (path below SHOPIFY_CDN, e.g. files/x.jpg) → ready media id, importing it into
+// Cloudinary when it is not in the library yet. Used by the catalogue import for product images.
+export const SHOPIFY_PATH=/^(files|products|collections)\/[A-Za-z0-9._%~-]{1,200}\.(jpe?g|png|webp)$/i;
+export async function mediaForPath(db,actor,path,cloud){
+ if(!SHOPIFY_PATH.test(path))return null;
+ const key=shopifyKey(path);await db.query('SELECT pg_advisory_xact_lock(hashtext($1))',[key]);
+ const found=(await db.query("SELECT id FROM media WHERE object_key=$1 AND state='ready'",[key])).rows[0];if(found)return String(found.id);
+ const asset=await cloud.importRemote(SHOPIFY_CDN+path,key);validateAsset(asset,key);
+ const mime=asset.format==='png'?'image/png':asset.format==='webp'?'image/webp':'image/jpeg';
+ const row=(await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,cloudinary_asset_id,version,width,height,format,label) VALUES($1,$2,$3,'ready',$4,$5,$6,$7,$8,$9,$10) RETURNING id",[key,mime,asset.bytes,actor,asset.asset_id,asset.version,asset.width,asset.height,asset.format,label(path)||key.split('/').pop()])).rows[0];
+ await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES($1,'import','media',$2)",[actor,row.id]);
+ return String(row.id);
+}
+
 // The images jackstudio.com.my uses in each slot of the Jack Studio 2026 theme (from the Shopify
 // theme settings, home template and outlet entries). Keys are matched case-insensitively.
 export const THEME_IMAGES=Object.freeze({

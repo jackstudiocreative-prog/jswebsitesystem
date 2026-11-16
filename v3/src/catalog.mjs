@@ -1,7 +1,7 @@
 import rules from '../../shared/catalog.js';
 import {HttpError} from './auth.mjs';
 import {saveVariants,syncSummary,variantsFor,variantShape,optionNames} from './inventory.mjs';
-const fields={products:['title','handle','description','status','collection_id','collection_ids','price_minor','sku','inventory','media','variants','option_names','featured_media_id','shipping_profile','weight_grams'],collections:['title','slug','description','status','position']};
+const fields={products:['title','handle','description','status','collection_id','collection_ids','price_minor','sku','inventory','media','variants','option_names','featured_media_id','shipping_profile','weight_grams','tags'],collections:['title','slug','description','status','position']};
 const bad=message=>{throw new HttpError(400,message);};
 export function id(value){const s=String(value);if(!/^[1-9]\d{0,17}$/.test(s))bad('Invalid ID');return s;}
 function integer(value,max=2147483647){if(!Number.isInteger(value)||value<0||value>max)bad('Invalid non-negative integer');return value;}
@@ -52,6 +52,8 @@ export async function save(db,resource,input,actor,key){
   // Price, SKU and stock live on variants; the product columns are a synced summary (inventory.mjs).
   names=input.option_names!==undefined?optionNames(input.option_names):(old?.option_names??[]);row.option_names=names;
   row.shipping_profile=value.shipping_profile??'general';if(!['general','luggage'].includes(row.shipping_profile))bad('Invalid shipping profile');row.weight_grams=integer(value.weight_grams??0,100000);
+  // Tags (as in Shopify): the theme's series shelves pick products by tag. Needs migration 010.
+  if(input.tags!==undefined){if(!Array.isArray(input.tags)||input.tags.length>250)bad('Use up to 250 tags');row.tags=[...new Set(input.tags.map(t=>String(t??'').trim()).filter(Boolean))];if(row.tags.some(t=>t.length>80))bad('Tags must be 80 characters or fewer');}
   if(input.collection_ids!==undefined)collectionIds=ids(input.collection_ids);
   else if(input.collection_id!==undefined)collectionIds=input.collection_id===null?[]:[id(input.collection_id)];
   else if(!key)collectionIds=[];

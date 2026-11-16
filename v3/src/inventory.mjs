@@ -36,10 +36,10 @@ function optionNames(value){
 }
 function variantInput(v,count){
  if(!v||typeof v!=='object'||Array.isArray(v))bad('Variant object required');
- if(Object.keys(v).some(k=>!['id','option_values','sku','price_minor','active','media_id','inventory'].includes(k)))bad('Unknown variant field');
+ if(Object.keys(v).some(k=>!['id','option_values','sku','price_minor','compare_at_minor','active','media_id','inventory'].includes(k)))bad('Unknown variant field');
  const values=v.option_values??[];if(!Array.isArray(values)||values.length!==count)bad(`Each variant needs ${count} option value${count===1?'':'s'}`);
  const sku=v.sku==null||String(v.sku).trim()===''?null:text(v.sku,'SKU',80);
- return {id:v.id==null?null:key(v.id),option_values:values.map(x=>text(x,'Option value',60)),sku,price_minor:whole(v.price_minor??0,'Price'),active:v.active===undefined?true:v.active,media_id:v.media_id==null||v.media_id===''?null:key(v.media_id),inventory:v.inventory};
+ return {id:v.id==null?null:key(v.id),option_values:values.map(x=>text(x,'Option value',60)),sku,price_minor:whole(v.price_minor??0,'Price'),...(v.compare_at_minor!==undefined?{compare_at_minor:v.compare_at_minor==null?null:whole(v.compare_at_minor,'Compare-at price')}:{}),active:v.active===undefined?true:v.active,media_id:v.media_id==null||v.media_id===''?null:key(v.media_id),inventory:v.inventory};
 }
 // Builds and applies the variant list for a product save. Products without options keep exactly
 // one default variant, so pre-variant API clients (price_minor/sku/inventory) keep working.
@@ -74,10 +74,12 @@ export async function saveVariants(db,{productId,input,old,optionNamesValue,medi
  for(const [position,v] of list.entries()){
   if(v.id){
    const e=existing.find(x=>String(x.id)===v.id),changed=JSON.stringify(e.option_values)!==JSON.stringify(v.option_values)||e.sku!==v.sku||e.price_minor!==v.price_minor||e.position!==position||e.active!==v.active||String(e.media_id??'')!==String(v.media_id??'');
+   if(v.compare_at_minor!==undefined&&v.compare_at_minor!==e.compare_at_minor)await db.query('UPDATE product_variants SET compare_at_minor=$1,updated_at=now() WHERE id=$2',[v.compare_at_minor,v.id]);
    if(changed){await db.query('UPDATE product_variants SET option_values=$1,sku=$2,price_minor=$3,position=$4,active=$5,media_id=$6,updated_at=now() WHERE id=$7',[v.option_values,v.sku,v.price_minor,position,v.active,v.media_id,v.id]);await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,'update','product_variants',$2)",[actor,v.id]);}
    if(v.stockTarget!==undefined&&v.stockTarget!==e.inventory)await adjustStock(db,{variantId:v.id,delta:v.stockTarget-e.inventory,reason:'correction',note:'Edited from product form',actor});
   }else{
    const created=(await db.query('INSERT INTO product_variants(product_id,option_values,sku,price_minor,position,active,media_id) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id',[productId,v.option_values,v.sku,v.price_minor,position,v.active,v.media_id])).rows[0];
+   if(v.compare_at_minor!=null)await db.query('UPDATE product_variants SET compare_at_minor=$1 WHERE id=$2',[v.compare_at_minor,created.id]);
    // A new product's own 'create' audit covers its first variants.
    if(old)await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,'create','product_variants',$2)",[actor,created.id]);
    if(v.inventory)await adjustStock(db,{variantId:created.id,delta:v.inventory,reason:'initial',actor});

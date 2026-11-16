@@ -41,14 +41,22 @@ export async function loadContext(db,refs,{mediaUrl=null}={}){
  if(refs.collections.size){
   const cs=(await db.query("SELECT id,title,slug,description FROM collections WHERE status='active' AND slug = ANY($1::text[])",[[...refs.collections]])).rows;
   for(const c of cs){
-   const ps=(await db.query(`SELECT p.id,p.title,p.handle,p.price_minor,p.featured_media_id,p.option_names,(SELECT coalesce(sum(v.inventory),0) FROM product_variants v WHERE v.product_id=p.id AND v.active)>0 AS available
-    FROM products p JOIN product_collections pc ON pc.product_id=p.id WHERE pc.collection_id=$1 AND p.status='active' ORDER BY p.title LIMIT 50`,[c.id])).rows;
+   // to_jsonb keeps this working before migration 010 (tags, compare-at prices).
+   const ps=(await db.query(`SELECT p.id,p.title,p.handle,p.price_minor,p.featured_media_id,p.option_names,coalesce(to_jsonb(p)->'tags','[]'::jsonb) AS tags,
+     (SELECT coalesce(sum(v.inventory),0) FROM product_variants v WHERE v.product_id=p.id AND v.active)>0 AS available,
+     (SELECT max((to_jsonb(v)->>'compare_at_minor')::int) FROM product_variants v WHERE v.product_id=p.id AND v.active) AS compare_at,
+     (SELECT array_agg(pm.media_id ORDER BY pm.position) FROM product_media pm WHERE pm.product_id=p.id) AS media_ids
+    FROM products p JOIN product_collections pc ON pc.product_id=p.id WHERE pc.collection_id=$1 AND p.status='active' ORDER BY p.id DESC LIMIT 250`,[c.id])).rows;
    collections.set(c.slug,{...c,products:ps});
   }
+  // Product images in one query.
+  const mids=[...new Set([...collections.values()].flatMap(c=>c.products.flatMap(p=>(p.media_ids??[]).map(String))))];
+  if(mids.length)for(const r of (await db.query("SELECT id,object_key,label,width,height,format FROM media WHERE state='ready' AND id = ANY($1::bigint[])",[mids])).rows)byId.set(String(r.id),r);
  }
  const img=(ref,alt)=>{if(ref==null||ref==='')return null;const row=/^\d+$/.test(String(ref))?byId.get(String(ref)):byKey.get(fileKey(String(ref)));return image(row,row&&mediaUrl?mediaUrl(row):null,alt);};
  const fileImage=name=>{const row=byKey.get(shopifyKey('files/'+name));return image(row,row&&mediaUrl?mediaUrl(row):null);};
- const product=p=>({id:String(p.id),title:p.title,handle:p.handle,url:'/products/'+p.handle,price:p.price_minor,price_min:p.price_minor,compare_at_price:null,available:p.available,tags:[],options_with_values:[],featured_image:null,images:[],metafields:{}});
+ const product=p=>{const images=(p.media_ids??[]).map(id=>img(String(id),p.title)).filter(Boolean),featured=p.featured_media_id?img(String(p.featured_media_id),p.title):images[0]??null;
+  return {id:String(p.id),title:p.title,handle:p.handle,url:'/products/'+p.handle,price:p.price_minor,price_min:p.price_minor,price_max:p.price_minor,compare_at_price:p.compare_at>p.price_minor?p.compare_at:null,compare_at_price_max:p.compare_at>p.price_minor?p.compare_at:null,available:p.available,tags:Array.isArray(p.tags)?p.tags:[],options_with_values:[],featured_image:featured,featured_media:featured?{preview_image:featured}:null,images,media:images.map(i=>({preview_image:i,media_type:'image'})),metafields:{},toString:()=>p.handle};};
  const collection=slug=>{const c=collections.get(slug);if(!c)return null;const products=c.products.map(product);return {id:String(c.id),title:c.title,handle:c.slug,url:'/collections/'+c.slug,description:c.description??'',products,products_count:products.length,all_products_count:products.length,image:null,toString:()=>c.slug};};
  return {img,fileImage,collection};
 }
