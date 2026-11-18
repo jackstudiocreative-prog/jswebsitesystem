@@ -8,6 +8,7 @@ import {save} from './catalog.mjs';
 import {mediaForPath,SHOPIFY_PATH,shopifyKey} from './shopify-import.mjs';
 import {SHOPIFY_CDN} from './shopify-media.mjs';
 import {SHOPIFY_STOCK} from './shopify-stock.mjs';
+import {hasColumn} from './schema.mjs';
 import {cleanHtml} from '../shared/page-templates.mjs';
 
 export const STORE='https://www.jackstudio.com.my';
@@ -115,9 +116,12 @@ export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson,{bu
   const handle=String(input.handle??'');if(!SLUG.test(handle))bad('Invalid collection');
   const c=(await db.query('SELECT id FROM collections WHERE slug=$1',[handle])).rows[0];if(!c)bad('Import collections first');
   const handles=[];for(let page=1;page<=20;page++){const list=(await fetchJson(`/collections/${handle}/products.json?limit=250&page=${page}`)).products??[];handles.push(...list.map(p=>p.handle));if(list.length<250)break;}
-  const ids=(await db.query('SELECT id FROM products WHERE handle = ANY($1::text[])',[handles])).rows.map(r=>r.id);
+  // Shopify lists a collection's products in its sort order; that order becomes V3's "Featured" order.
+  const byHandle=new Map((await db.query('SELECT id,handle FROM products WHERE handle = ANY($1::text[])',[handles])).rows.map(r=>[r.handle,r.id]));
+  const ids=[...new Set(handles.map(h=>byHandle.get(h)).filter(Boolean))];
+  const ordered=await hasColumn(db,'product_collections','position');
   await db.query('DELETE FROM product_collections WHERE collection_id=$1',[c.id]);
-  for(const id of ids)await db.query('INSERT INTO product_collections VALUES ($1,$2) ON CONFLICT DO NOTHING',[id,c.id]);
+  for(const [i,id] of ids.entries())await db.query(ordered?'INSERT INTO product_collections(product_id,collection_id,position) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING':'INSERT INTO product_collections VALUES ($1,$2) ON CONFLICT DO NOTHING',ordered?[id,c.id,i]:[id,c.id]);
   await db.query('UPDATE products SET collection_id=$1 WHERE collection_id IS NULL AND id = ANY($2::bigint[])',[c.id,ids]);
   await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES($1,'import','collections',$2)",[actor,c.id]);
   return {step,handle,linked:ids.length,missing:handles.length-ids.length};

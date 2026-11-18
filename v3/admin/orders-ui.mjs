@@ -27,7 +27,7 @@ export function createOrders(h){
   const grid=el('div',undefined,'editor-grid'),main=el('section',undefined,'card'),aside=el('section',undefined,'card');root.append(grid);grid.append(main,aside);
   // Items and totals.
   main.append(el('h2','Items'));const wrap=el('div',undefined,'table-wrap'),tb=el('table'),thead=el('thead'),hr=el('tr'),body=el('tbody');for(const x of ['Product','SKU','Price','Qty','Total'])hr.append(el('th',x));thead.append(hr);tb.append(thead,body);wrap.append(tb);main.append(wrap);
-  for(const l of o.lines){const tr=el('tr');td(tr,el('span',l.title),...(l.variant_title?[el('small',l.variant_title,'cell-note')]:[]));cell(tr,l.sku||'—');cell(tr,formatPrice(l.unit_price_minor));cell(tr,String(l.quantity));cell(tr,formatPrice(l.line_total_minor));body.append(tr);}
+  for(const l of o.lines){const tr=el('tr');td(tr,el('span',l.title),...(l.variant_title?[el('small',l.variant_title,'cell-note')]:[]),...(l.personalization?[el('small','Engraving: '+l.personalization,'cell-note engraving-note')]:[]));cell(tr,l.sku||'—');cell(tr,formatPrice(l.unit_price_minor));cell(tr,String(l.quantity));cell(tr,formatPrice(l.line_total_minor));body.append(tr);}
   const totals=el('dl',undefined,'order-totals');for(const [k,v] of [['Subtotal',formatPrice(o.subtotal_minor)],['Shipping',`${formatPrice(o.shipping_minor)} · ${o.shipping_names}`],['Total',formatPrice(o.total_minor)],...(o.refunded_minor?[['Refunded','−'+formatPrice(o.refunded_minor)]]:[])]){totals.append(el('dt',k),el('dd',v));}main.append(totals);
   main.append(el('h2','Customer and delivery'));const addr=el('div',undefined,'order-address');for(const line of [o.customer_name,o.email,o.phone,o.address_line1,o.address_line2,`${o.postcode} ${o.city}`,`${o.state}, Malaysia`])if(line)addr.append(el('p',line));if(o.note)addr.append(el('p','Note: '+o.note,'muted'));main.append(addr);
   // Gateway evidence: every attempt and every verified/unverified message.
@@ -44,7 +44,10 @@ export function createOrders(h){
   if(o.tracking_number)aside.append(el('p','Tracking: '+o.tracking_number));
   const act=async(path,body,message)=>{await api(`orders/${o.id}/${path}`,{revision:o.revision,...body},'POST');await detail(o.id);notify(message);};
   if(o.needs_attention){const box=el('div',undefined,'attention-box'),note=field('How was this resolved?','');note.input.maxLength=300;box.append(el('strong','Needs attention'),el('p',o.attention_note),note.wrap,button('Mark resolved',()=>act('resolve',{note:note.input.value},'Marked as resolved.'),readOnly));aside.append(box);}
-  if(o.status==='paid'&&o.fulfillment_status==='unfulfilled'){const tr=field('Tracking number (optional)','');tr.input.maxLength=80;aside.append(el('h2','Fulfil'),tr.wrap,button('Mark as fulfilled',()=>act('fulfil',{tracking_number:tr.input.value},'Order marked as fulfilled.'),readOnly));}
+  if(o.status==='paid'&&o.fulfillment_status==='unfulfilled'){const tr=field('Tracking number (optional)','');tr.input.maxLength=80;aside.append(el('h2','Fulfil'));
+   // Engraving is done before packing: list exactly what to engrave on which item.
+   const engraved=o.lines.filter(l=>l.personalization);if(engraved.length){const box=el('div',undefined,'engraving-list');box.append(el('strong',`Engrave before shipping (${engraved.reduce((n,l)=>n+l.quantity,0)} items)`));const ul=el('ul');for(const l of engraved)ul.append(el('li',`${l.quantity} × ${l.title}${l.variant_title?' · '+l.variant_title:''}: “${l.personalization}”`));box.append(ul);aside.append(box);}
+   aside.append(tr.wrap,button('Mark as fulfilled',()=>act('fulfil',{tracking_number:tr.input.value},'Order marked as fulfilled.'),readOnly));}
   if(o.status==='pending_payment')aside.append(button('Cancel order and release stock',async()=>{if(!window.confirm('Cancel this unpaid order? Reserved stock is released.'))return;await act('cancel',{},'Order cancelled; stock released.');},readOnly));
   if(o.status==='paid'&&o.refunded_minor<o.total_minor){
    const form=el('form',undefined,'refund-form'),amount=field('Refund amount (MYR)',((o.total_minor-o.refunded_minor)/100).toFixed(2)),ref=field('eGHL refund reference',''),note=field('Note (optional)',''),restock=field('Return items to stock','','checkbox');ref.input.maxLength=80;note.input.maxLength=500;
@@ -82,5 +85,5 @@ export function createOrders(h){
   card.append(el('p','Currency: MYR. Staff permissions and MFA are managed through the approved Supabase process. Editing these settings in the workspace is not implemented yet.','muted'));
   root.append(card);
  }
- return {orders,customers,settings,resetOrders:()=>{offset=0;search='';status='';}};
+ return {orders,customers,settings,resetOrders:()=>{offset=0;search='';status='';},filterOrders:s=>{offset=0;search='';status=s;}};
 }
