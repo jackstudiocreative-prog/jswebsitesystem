@@ -36,12 +36,20 @@ export function mountAdmin(api,role,notify){
    say('Importing collections…');const cols=await api('catalog/import',{step:'collections'},'POST');c.failed.push(...cols.items.filter(i=>i.status==='failed'));
    // One request at a time; a request that fails is tried once more before it is reported.
    const call=async body=>{try{return await api('catalog/import',body,'POST');}catch{await new Promise(r=>setTimeout(r,1500));return api('catalog/import',body,'POST');}};
+   let failedPages=0;
    for(let page=1;!c.stop;page++){
-    const skip=[];for(let n=0;n<40&&!c.stop;n++){const im=await call({step:'images',page,skip});for(const f of im.failed){c.failed.push(f);skip.push(f.handle);}say(`Importing images of products page ${page}…`);if(!im.remaining||!im.imported&&!im.failed.length)break;}
-    const r=await call({step:'products',page});
-    for(const i of r.items){if(i.status==='failed'||i.status==='skipped')c.failed.push(i);else c.counts[i.status]++;}
-    say(`Importing products… ${c.counts.imported} new · ${c.counts.updated} updated${c.failed.length?` · ${c.failed.length} not imported`:''}`);
-    if(r.done)break;
+    const skip=[];for(let n=0;n<40&&!c.stop;n++){let im;try{im=await call({step:'images',page,skip});}catch(e){c.failed.push({handle:`images of page ${page}`,error:e.message});break;}for(const f of im.failed){c.failed.push(f);skip.push(f.handle);}say(`Importing images of products page ${page}…`);if(im.retry)continue;if(!im.remaining||!im.imported&&!im.failed.length)break;}
+    // A page can take several requests: the server stops before the time limit and returns next_offset.
+    let r,offset=0;
+    do{
+     try{r=await call({step:'products',page,offset});}catch(e){c.failed.push({handle:`products page ${page}`,error:e.message});r=null;break;}
+     for(const i of r.items){if(i.status==='failed'||i.status==='skipped')c.failed.push(i);else c.counts[i.status]++;}
+     say(`Importing products… ${c.counts.imported} new · ${c.counts.updated} updated${c.failed.length?` · ${c.failed.length} not imported`:''}`);
+     offset=r.next_offset;
+    }while(offset!=null&&!c.stop);
+    // A page that failed twice is reported and the import moves on; running it again fills the gap.
+    failedPages=r?0:failedPages+1;
+    if(r?.done||failedPages>=3||page>=200)break;
    }
    for(const handle of cols.handles){if(c.stop)break;say(`Linking products to collection ${handle}…`);try{await call({step:'memberships',handle});}catch(e){c.failed.push({handle,error:e.message});}}
    notify(c.stop?'Catalogue import paused. Start it again to continue.':`Catalogue import finished: ${c.counts.imported} new and ${c.counts.updated} updated products${c.failed.length?`, ${c.failed.length} not imported`:''}.`);
