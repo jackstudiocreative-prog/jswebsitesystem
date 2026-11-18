@@ -40,7 +40,7 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
  await page.goto('/pages/privacy-policy');await expect(page.getByRole('heading',{level:1,name:'Privacy Policy'})).toBeVisible();
  await page.goto('/pages/does-not-exist');await expect(page.locator('.jh-header')).toBeVisible();await expect(page.locator('.jf-footer')).toBeVisible();await expect(page.getByRole('heading',{name:'Page not found'})).toBeVisible();
  // Mobile: the menu opens as a drawer.
- await page.setViewportSize({width:390,height:844});await page.goto('/');
+ await page.setViewportSize({width:390,height:844});await page.goto('/');await expect(page.locator('body[data-site-ready]')).toBeAttached();
  await page.getByRole('button',{name:'Menu',exact:true}).click();await expect(page.locator('.jh-nav').getByRole('link',{name:'Outlets',exact:true})).toBeVisible();
  await page.getByRole('button',{name:'Close menu'}).click();await expect(page.locator('.jh-nav').getByRole('link',{name:'Outlets',exact:true})).toBeHidden();
  g.check();

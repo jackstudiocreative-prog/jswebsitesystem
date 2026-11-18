@@ -3,6 +3,7 @@ import {HttpError} from './auth.mjs';
 import {adjustStock,syncSummary} from './inventory.mjs';
 import {amount} from './payments.mjs';
 import {queueEmail} from './email.mjs';
+import {publicImage} from './media-urls.mjs';
 import {MAX_PENDING_PER_EMAIL} from './protect.mjs';
 // Orders and payments. Everything a customer sends is re-priced on the server. Stock is reserved at
 // checkout through the ledger ('sale') and released if the order expires or is cancelled
@@ -45,18 +46,29 @@ async function price(db,lines,{strict=true}={}){
  for(const l of lines){
   const v=rows.find(r=>String(r.id)===l.variant_id);
   if(!v||!v.sellable){if(strict)throw new HttpError(409,'An item in your bag is no longer available.');out.push({...l,available:false});continue;}
-  const line={variant_id:l.variant_id,product_id:String(v.product_id),title:v.title,handle:v.handle,variant_title:variantTitle(v.option_names,v.option_values),sku:v.sku,unit_price_minor:v.price_minor,quantity:l.quantity,line_total_minor:v.price_minor*l.quantity,available:v.inventory>=l.quantity,in_stock:v.inventory};
+  const line={variant_id:l.variant_id,product_id:String(v.product_id),media_id:v.media_id==null?null:String(v.media_id),title:v.title,handle:v.handle,variant_title:variantTitle(v.option_names,v.option_values),sku:v.sku,unit_price_minor:v.price_minor,quantity:l.quantity,line_total_minor:v.price_minor*l.quantity,available:v.inventory>=l.quantity,in_stock:v.inventory};
   out.push(line);subtotal+=line.line_total_minor;
   const g=groups[v.shipping_profile]??={subtotal:0,weight:0};g.subtotal+=line.line_total_minor;g.weight+=v.weight_grams*l.quantity;
  }
  return {lines:out,subtotal,groups};
+}
+// Bag thumbnails: the variant's own image, else the product's featured or first gallery image.
+async function lineImages(db,lines){
+ const out=new Map();if(!lines.length)return out;
+ const rows=(await db.query(`SELECT p.id,coalesce(p.featured_media_id,(SELECT pm.media_id FROM product_media pm WHERE pm.product_id=p.id ORDER BY pm.position LIMIT 1)) AS media_id FROM products p WHERE p.id = ANY($1::bigint[])`,[[...new Set(lines.map(l=>l.product_id))]])).rows;
+ const productMedia=new Map(rows.map(r=>[String(r.id),r.media_id==null?null:String(r.media_id)]));
+ const ids=[...new Set(lines.map(l=>l.media_id??productMedia.get(l.product_id)).filter(Boolean))];
+ const media=ids.length?new Map((await db.query("SELECT id,width,height,label FROM media WHERE state='ready' AND id = ANY($1::bigint[])",[ids])).rows.map(m=>[String(m.id),m])):new Map();
+ for(const l of lines){const m=media.get(l.media_id??'')??media.get(productMedia.get(l.product_id)??'');if(m)out.set(l.variant_id,publicImage(m,l.title));}
+ return out;
 }
 export async function quoteBag(db,input){
  const lines=linesInput(input?.lines);const priced=await price(db,lines,{strict:false});
  let shipping=null,shippingError=null;
  if(priced.lines.some(l=>l.available===false&&!l.title))shippingError='Remove unavailable items to continue.';
  else try{shipping=await quoteShipping(db,priced.groups);}catch(e){if(!e.status)throw e;shippingError=e.message;}
- return {lines:priced.lines.map(({in_stock,...l})=>({...l,low:in_stock!==undefined&&in_stock<=5})),subtotal_minor:priced.subtotal,shipping_minor:shipping?.shipping_minor??null,shipping_names:shipping?.names??[],shipping_error:shippingError,total_minor:shipping?priced.subtotal+shipping.shipping_minor:null,currency:'MYR'};
+ const images=await lineImages(db,priced.lines.filter(l=>l.title));
+ return {lines:priced.lines.map(({in_stock,media_id,...l})=>({...l,image:l.title?images.get(l.variant_id)??null:null,low:in_stock!==undefined&&in_stock<=5})),subtotal_minor:priced.subtotal,shipping_minor:shipping?.shipping_minor??null,shipping_names:shipping?.names??[],shipping_error:shippingError,total_minor:shipping?priced.subtotal+shipping.shipping_minor:null,currency:'MYR'};
 }
 function customerInput(c){
  if(!c||typeof c!=='object')bad('Customer details required');
@@ -272,12 +284,4 @@ export async function listCustomers(db,params){
  return {items:rows.map(r=>({...r,spent_minor:Number(r.spent_minor)})),total,limit,offset};
 }
 export async function shippingRates(db){return (await db.query('SELECT profile,name,price_minor,min_subtotal_minor,min_weight_grams,max_weight_grams FROM shipping_rates WHERE active ORDER BY profile,price_minor')).rows;}
-// Public product page data: sellable variants only, availability without exact stock counts.
-export async function storefrontProduct(db,handle){
- if(!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(handle))throw new HttpError(404,'Product not found');
- const p=(await db.query(`SELECT p.id,p.title,p.handle,p.description,p.option_names,p.shipping_profile FROM products p WHERE p.handle=$1 AND p.status='active' AND EXISTS(SELECT 1 FROM product_collections pc JOIN collections c ON c.id=pc.collection_id WHERE pc.product_id=p.id AND c.status='active')`,[handle])).rows[0];
- if(!p)throw new HttpError(404,'Product not found');
- const variants=(await db.query('SELECT id,option_values,price_minor,inventory FROM product_variants WHERE product_id=$1 AND active ORDER BY position,id',[p.id])).rows.map(v=>({id:String(v.id),option_values:v.option_values,price_minor:v.price_minor,available:v.inventory>0,low:v.inventory>0&&v.inventory<=5}));
- return {product:{...p,id:String(p.id),variants},checkoutAvailable:true};
-}
 export {randomUUID};

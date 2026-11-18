@@ -24,7 +24,7 @@ The shared `v3/shared/brand-2026.css` layer is copied by the build and loaded in
 
 ## Scope and validation
 
-This is a layout and interaction refresh of existing V3 functionality, not full Shopify feature parity. Payment processing, permissions, database migrations, production hosting and public-image delivery are unchanged. In particular, product image placeholders remain where the existing public delivery pipeline provides no images. No new analytics, marketing, discount engine, membership or Shopify integration is claimed.
+This is a layout and interaction refresh of existing V3 functionality, not full Shopify feature parity. Payment processing, permissions, database migrations, production hosting and public-image delivery are unchanged. Public product and page images were added afterwards (see V3-STOREFRONT-CATALOG.md). No new analytics, marketing, discount engine, membership or Shopify integration is claimed.
 
 Use `npm test`, `npm run build`, and `npm run e2e` from `v3`. The browser suite covers product edits, stock, page publishing, themes, preview, orders, checkout and mobile navigation. The original suite contains scoped colour-contrast exemptions for legacy storefront content; passing it is not a claim of a complete accessibility audit. Three real-PostgreSQL tests require the separately configured test database.
 

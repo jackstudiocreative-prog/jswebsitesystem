@@ -6,6 +6,7 @@ import {Liquid,Tag} from 'liquidjs';
 import {SECTIONS,BLOCKS,SNIPPETS,LOCALE,SETTINGS,OUTLETS,VIDEOS} from './liquid-files.mjs';
 import {SECTION_SCHEMAS,BLOCK_SCHEMAS} from '../shared/liquid-theme.mjs';
 import {shopifyKey} from './shopify-import.mjs';
+import {publicMediaUrl,publicSrcset} from './media-urls.mjs';
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const PLACEHOLDER="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1200' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%23e7e1d3'/%3E%3C/svg%3E";
@@ -15,9 +16,12 @@ const fileKey=ref=>SHOPIFY_IMAGE.test(ref)?shopifyKey('files/'+ref.match(SHOPIFY
 
 // Shopify-style image object. src is a URL when one can be shown (signed admin preview); otherwise a
 // neutral placeholder so layouts keep their shape.
-function image(row,url,alt){
+function image(row,url,alt,pub=false){
  const src=url||(row?.width&&row?.height?`data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='${row.width}' height='${row.height}' viewBox='0 0 ${row.width} ${row.height}'%3E%3Crect width='${row.width}' height='${row.height}' fill='%23e7e1d3'/%3E%3C/svg%3E`:PLACEHOLDER),w=row?.width??1600,h=row?.height??1200;
- return {id:row?.id?String(row.id):null,src,url:src,alt:alt??row?.label??'',width:w,height:h,aspect_ratio:w/h,presentation:{focal_point:'50% 50%'},toString(){return src;}};
+ const img={id:row?.id?String(row.id):null,src,url:src,alt:alt??row?.label??'',width:w,height:h,aspect_ratio:w/h,presentation:{focal_point:'50% 50%'},toString(){return src;}};
+ // Public storefront images: image_url/image_tag pick a fixed width and add a srcset.
+ if(pub&&url&&row?.id)Object.defineProperties(img,{_public:{value:true},_srcset:{value:publicSrcset(row.id,row.width)}});
+ return img;
 }
 // Shopify-hosted video (shopify://files/videos/<name>) → object for the video_tag filter.
 function video(v){const name=String(v??'').match(/^shopify:\/\/files\/videos\/(.+)$/)?.[1];const m=name&&VIDEOS[name];return m?{alt:'',sources:[{url:m.mp4,mime_type:'video/mp4'}],preview_image:{src:m.poster,url:m.poster,toString:()=>m.poster},toString:()=>m.mp4}:null;}
@@ -31,7 +35,7 @@ function videoUrl(v){
 const money=c=>'RM'+(Number(c??0)/100).toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g,',');
 
 // Context: loads referenced images and collections in one pass before rendering.
-export async function loadContext(db,refs,{mediaUrl=null}={}){
+export async function loadContext(db,refs,{mediaUrl=null,publicImages=false}={}){
  const keys=new Set(),ids=new Set();
  for(const r of refs.images){if(/^\d+$/.test(r))ids.add(r);else if(fileKey(r))keys.add(fileKey(r));}
  for(const o of OUTLETS)if(o.photo)keys.add(shopifyKey('files/'+o.photo));
@@ -45,18 +49,23 @@ export async function loadContext(db,refs,{mediaUrl=null}={}){
    const ps=(await db.query(`SELECT p.id,p.title,p.handle,p.price_minor,p.featured_media_id,p.option_names,coalesce(to_jsonb(p)->'tags','[]'::jsonb) AS tags,
      (SELECT coalesce(sum(v.inventory),0) FROM product_variants v WHERE v.product_id=p.id AND v.active)>0 AS available,
      (SELECT max((to_jsonb(v)->>'compare_at_minor')::int) FROM product_variants v WHERE v.product_id=p.id AND v.active) AS compare_at,
-     (SELECT array_agg(pm.media_id ORDER BY pm.position) FROM product_media pm WHERE pm.product_id=p.id) AS media_ids
+     (SELECT array_agg(pm.media_id ORDER BY pm.position) FROM product_media pm WHERE pm.product_id=p.id) AS media_ids,
+     (SELECT coalesce(json_agg(json_build_object('id',v.id::text,'options',v.option_values,'price',v.price_minor,'available',v.inventory>0,'media_id',v.media_id::text) ORDER BY v.position,v.id),'[]'::json) FROM product_variants v WHERE v.product_id=p.id AND v.active) AS variants
     FROM products p JOIN product_collections pc ON pc.product_id=p.id WHERE pc.collection_id=$1 AND p.status='active' ORDER BY p.id DESC LIMIT 250`,[c.id])).rows;
    collections.set(c.slug,{...c,products:ps});
   }
   // Product images in one query.
-  const mids=[...new Set([...collections.values()].flatMap(c=>c.products.flatMap(p=>(p.media_ids??[]).map(String))))];
+  const mids=[...new Set([...collections.values()].flatMap(c=>c.products.flatMap(p=>[...(p.media_ids??[]),p.featured_media_id,...(Array.isArray(p.variants)?p.variants.map(v=>v.media_id):[])].filter(Boolean).map(String))))];
   if(mids.length)for(const r of (await db.query("SELECT id,object_key,label,width,height,format FROM media WHERE state='ready' AND id = ANY($1::bigint[])",[mids])).rows)byId.set(String(r.id),r);
  }
- const img=(ref,alt)=>{if(ref==null||ref==='')return null;const row=/^\d+$/.test(String(ref))?byId.get(String(ref)):byKey.get(fileKey(String(ref)));return image(row,row&&mediaUrl?mediaUrl(row):null,alt);};
- const fileImage=name=>{const row=byKey.get(shopifyKey('files/'+name));return image(row,row&&mediaUrl?mediaUrl(row):null);};
+ const img=(ref,alt)=>{if(ref==null||ref==='')return null;const row=/^\d+$/.test(String(ref))?byId.get(String(ref)):byKey.get(fileKey(String(ref)));return image(row,row&&mediaUrl?mediaUrl(row):null,alt,publicImages);};
+ const fileImage=name=>{const row=byKey.get(shopifyKey('files/'+name));return image(row,row&&mediaUrl?mediaUrl(row):null,undefined,publicImages);};
  const product=p=>{const images=(p.media_ids??[]).map(id=>img(String(id),p.title)).filter(Boolean),featured=p.featured_media_id?img(String(p.featured_media_id),p.title):images[0]??null;
-  return {id:String(p.id),title:p.title,handle:p.handle,url:'/products/'+p.handle,price:p.price_minor,price_min:p.price_minor,price_max:p.price_minor,compare_at_price:p.compare_at>p.price_minor?p.compare_at:null,compare_at_price_max:p.compare_at>p.price_minor?p.compare_at:null,available:p.available,tags:Array.isArray(p.tags)?p.tags:[],options_with_values:[],featured_image:featured,featured_media:featured?{preview_image:featured}:null,images,media:images.map(i=>({preview_image:i,media_type:'image'})),metafields:{},toString:()=>p.handle};};
+  // Real variant IDs, so the theme's quick-add buttons put the right variant in the bag (web/cart-bridge.mjs).
+  const names=p.option_names??[],variants=(Array.isArray(p.variants)?p.variants:[]).map(v=>({id:v.id,title:(v.options??[]).join(' / ')||'Default Title',options:v.options??[],option1:v.options?.[0]??null,option2:v.options?.[1]??null,option3:v.options?.[2]??null,price:v.price,available:v.available,featured_image:v.media_id?img(v.media_id,p.title):null,toString:()=>v.id}));
+  const prices=variants.map(v=>v.price),first=variants.find(v=>v.available)??variants[0]??null;
+  const options_with_values=names.map((name,i)=>({name,position:i+1,values:[...new Set(variants.map(v=>v.options[i]).filter(Boolean))]}));
+  return {id:String(p.id),title:p.title,handle:p.handle,url:'/products/'+p.handle,price:prices.length?Math.min(...prices):p.price_minor,price_min:prices.length?Math.min(...prices):p.price_minor,price_max:prices.length?Math.max(...prices):p.price_minor,price_varies:new Set(prices).size>1,variants,first_available_variant:first,selected_or_first_available_variant:first,has_only_default_variant:variants.length<=1&&!names.length,options:names,compare_at_price:p.compare_at>p.price_minor?p.compare_at:null,compare_at_price_max:p.compare_at>p.price_minor?p.compare_at:null,available:p.available,tags:Array.isArray(p.tags)?p.tags:[],options_with_values,featured_image:featured,featured_media:featured?{preview_image:featured}:null,images,media:images.map(i=>({preview_image:i,media_type:'image'})),metafields:{},toString:()=>p.handle};};
  const collection=slug=>{const c=collections.get(slug);if(!c)return null;const products=c.products.map(product);return {id:String(c.id),title:c.title,handle:c.slug,url:'/collections/'+c.slug,description:c.description??'',products,products_count:products.length,all_products_count:products.length,image:null,toString:()=>c.slug};};
  return {img,fileImage,collection};
 }
@@ -111,10 +120,12 @@ function liquid(){
  engine=new Liquid({templates:SNIPPETS,strictFilters:false,strictVariables:false,ownPropertyOnly:false});
  engine.registerTag('form',FormTag);for(const t of ['paginate','javascript','stylesheet'])engine.registerTag(t,PassTag);engine.registerTag('content_for',ContentForTag);
  engine.registerTag('section',class extends Tag{render(){return '';}});
- const imgUrl=v=>v==null||v===''?'':typeof v==='object'?v.src:String(v);
- engine.registerFilter('image_url',imgUrl);engine.registerFilter('img_url',imgUrl);engine.registerFilter('file_url',v=>imgUrl(v));
- engine.registerFilter('image_tag',function(v,...args){const o=Object.fromEntries(args.filter(Array.isArray));const src=imgUrl(v);if(!src)return '';
-  const attrs={src,alt:o.alt??(typeof v==='object'?v.alt:''),loading:o.loading,width:o.width??(typeof v==='object'?v.width:undefined),height:o.height??(typeof v==='object'?v.height:undefined),class:o.class,sizes:o.sizes};
+ const widthArg=args=>{for(const a of args)if(Array.isArray(a)&&a[0]==='width')return a[1];return undefined;};
+ const imgUrl=(v,...args)=>{if(v==null||v==='')return '';if(typeof v!=='object')return String(v);const w=widthArg(args);return v._public&&w?publicMediaUrl(v.id,w):v.src;};
+ engine.registerFilter('image_url',imgUrl);engine.registerFilter('img_url',(v,size)=>imgUrl(v,...(typeof size==='string'&&/^\d+x/.test(size)?[['width',Number(size.split('x')[0])]]:[])));engine.registerFilter('file_url',v=>imgUrl(v));
+ engine.registerFilter('image_tag',function(v,...args){const o=Object.fromEntries(args.filter(Array.isArray));const src=imgUrl(v,...args);if(!src)return '';
+  const pub=typeof v==='object'&&v?._public;
+  const attrs={src,srcset:pub?v._srcset:undefined,alt:o.alt??(typeof v==='object'?v.alt:''),loading:o.loading,width:o.width??(typeof v==='object'?v.width:undefined),height:o.height??(typeof v==='object'?v.height:undefined),class:o.class,sizes:o.sizes??(pub?'(min-width: 990px) 50vw, 100vw':undefined)};
   return '<img'+Object.entries(attrs).filter(([,x])=>x!=null&&x!=='').map(([k,x])=>` ${k}="${esc(x)}"`).join('')+'>';});
  engine.registerFilter('placeholder_svg_tag',(name,cls)=>`<svg class="${esc(cls??'placeholder-svg')}" viewBox="0 0 4 3" aria-hidden="true"><rect width="4" height="3" fill="#e7e1d3"/></svg>`);
  engine.registerFilter('video_tag',function(v,...args){if(!v?.sources?.length)return '';const o=Object.fromEntries(args.filter(Array.isArray));

@@ -17,6 +17,6 @@ async function show(){
  const p=page.page;document.title=p.seo_title||`${p.title} | Jack Studio`;
  document.querySelector('meta[name=description]').setAttribute('content',p.seo_description||'');
  for(const [k,v] of [['og:title',p.seo_title||p.title],['og:description',p.seo_description||''],['og:type','website']]){const m=document.createElement('meta');m.setAttribute('property',k);m.setAttribute('content',v);document.head.append(m);}
- canonical('/pages/'+p.slug);root.innerHTML=renderPage(p,{});if(frame)await mountSite(frame,root);
+ canonical('/pages/'+p.slug);root.innerHTML=renderPage(p,page.media??{});if(frame)await mountSite(frame,root);
 }
 show().catch(()=>message('This page could not be loaded. Please try again.'));

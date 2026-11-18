@@ -5,7 +5,12 @@ export function cloudAdapter(env=process.env){
  const {CLOUDINARY_CLOUD_NAME:cloud_name,CLOUDINARY_API_KEY:api_key,CLOUDINARY_API_SECRET:api_secret,CLOUDINARY_UPLOAD_PRESET:preset}=env;
  if(!cloud_name||!api_key||!api_secret||!preset)throw new HttpError(503,'Media service not configured');
  const options={cloud_name,api_key,api_secret,secure:true,timeout:8000};
- return {cloud_name,api_key,preset,preview:m=>cloudinary.utils.private_download_url(m.object_key,m.format,{...options,type:'authenticated',expires_at:Math.floor(Date.now()/1000)+300,attachment:false}),sign:p=>cloudinary.utils.api_sign_request(p,api_secret),
+ return {cloud_name,api_key,preset,
+  // Storefront derivative: fixed width, never upscaled, automatic format/quality. Cloudinary strips
+  // metadata from transformed images. Authenticated delivery needs this server-side signature, so a
+  // visitor cannot request the original or any other transformation.
+  publicDerivative:(m,width)=>cloudinary.url(m.object_key,{...options,type:'authenticated',sign_url:true,version:m.version??undefined,format:'webp',transformation:[{width,crop:'limit',quality:'auto'}]}),
+  preview:m=>cloudinary.utils.private_download_url(m.object_key,m.format,{...options,type:'authenticated',expires_at:Math.floor(Date.now()/1000)+300,attachment:false}),sign:p=>cloudinary.utils.api_sign_request(p,api_secret),
   inspect:id=>cloudinary.api.resource(id,{...options,resource_type:'image',type:'authenticated'}),
   // Server-side signed upload by URL (Shopify import). Same preset and private delivery as staff uploads.
   importRemote:(url,public_id)=>cloudinary.uploader.upload(url,{...options,timeout:20000,public_id,asset_folder:'jackstudio-websitesystem/shopify',type:'authenticated',resource_type:'image',overwrite:false,upload_preset:preset})};

@@ -2,6 +2,9 @@
 // The HTML comes from the server (or, in a staff preview tab, from the admin); the theme's stylesheet,
 // the small runtime and the section scripts load as same-site files.
 import {previewPages,previewInfo} from './theme-behaviour.mjs';
+import './cart-bridge.mjs';
+import './image-fallback.mjs';
+import {updateBadges} from './bag.mjs';
 export async function siteData(slug){
  const preview=previewPages();if(preview){previewInfo();return preview[slug]??null;}
  const r=await fetch('/api/v3/storefront/theme/pages/'+slug).catch(()=>null);return r?.ok?r.json():null;
@@ -24,4 +27,7 @@ export async function mountSite(data,main){
  document.body.className='lq-body';document.body.append(head,body,foot);if(bar)document.body.prepend(bar);
  await load('script',{src:'/theme-assets/shopify/runtime.js'});await load('script',{src:'/theme-assets/shopify/jack-studio.js'});
  if(data.scripts?.length)await load('script',{src:'/api/v3/storefront/theme/scripts.js?s='+encodeURIComponent(data.scripts.join(','))});
+ updateBadges();
+ // Header/menu scripts are attached: tests and tooling can wait for this.
+ document.body.dataset.siteReady='1';
 }
