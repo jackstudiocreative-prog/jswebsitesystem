@@ -23,12 +23,12 @@ function store(){
   if(path.startsWith('/collections/urban-carry/products.json'))return {products:[{handle:'urban-sling'},{handle:'card-holder'},{handle:'gone'}]};
   throw Error('unexpected '+path);}};
 }
-async function harness(){
+async function harness(options={}){
  const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  await migrate(sql);await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");await db.query('SET ROLE jackstudio_api');
  const uploads=[],s=store();
  const cloud={preview:m=>'https://api.cloudinary.com/p/'+m.id,importRemote:async(url,public_id)=>{uploads.push(url);return {public_id,resource_type:'image',type:'authenticated',asset_id:'a'+uploads.length,version:1,format:'jpg',bytes:1000,width:800,height:800};}};
- const pool={connect:async()=>({...sql,release(){}})},server=createServer(handler(pool,async sub=>({sub,aal:'aal2'}),{cloud,storeJson:s.fetch}));
+ const pool={connect:async()=>({...sql,release(){}})},server=createServer(handler(pool,async sub=>({sub,aal:'aal2'}),{cloud,storeJson:s.fetch,...options}));
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port+'/api/v3/';
  const post=async(body,token='editor')=>{const r=await fetch(base+'catalog/import',{method:'POST',headers:{'Content-Type':'application/json',Authorization:'Bearer '+token},body:JSON.stringify(body)});return {status:r.status,body:await r.json()};};
  return {db,sql,post,uploads,s,close:async()=>{await new Promise(r=>server.close(r));await db.close();}};
@@ -73,5 +73,20 @@ test('catalogue import: collections, products with variants, tags, prices, image
   // The theme's series shelves and best sellers see the products by collection and tag.
   const page=await renderPage(h.sql,'product-collection',PAGE_TEMPLATES['product-collection']);
   assert.match(page.html,/Urban Sling/);
+ }finally{await h.close();}
+});
+
+test('catalogue import: a slow page continues where it stopped instead of timing out',async()=>{
+ const h=await harness({importBudget:0});
+ try{
+  await h.post({step:'collections'});await h.post({step:'images',page:1});
+  // Budget 0: one product per request, then next_offset says where to continue.
+  let r=await h.post({step:'products',page:1});
+  assert.deepEqual([r.body.items.length,r.body.next_offset,r.body.done],[1,1,false]);
+  r=await h.post({step:'products',page:1,offset:1});assert.deepEqual([r.body.items.length,r.body.next_offset,r.body.done],[1,2,false]);
+  r=await h.post({step:'products',page:1,offset:2});assert.deepEqual([r.body.items.length,r.body.next_offset,r.body.done],[1,null,true]);
+  assert.equal(r.body.items[0].status,'skipped');
+  assert.equal((await h.post({step:'products',page:1,offset:6})).status,400);
+  assert.equal(Number((await h.sql.query("SELECT count(*) AS n FROM products")).rows[0].n),2);
  }finally{await h.close();}
 });

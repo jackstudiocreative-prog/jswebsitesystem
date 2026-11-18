@@ -153,7 +153,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
    else if(theme){result=themeAction==='pages-preview'?await previewThemePages(db,input,options.cloud??cloudAdapter()):themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'||themeAction==='pages-preview'?200:201;}
    else if(mediaImport)result=await importShopify(db,claims.sub,input,options.cloud??cloudAdapter());
-   else if(catalogImport)result=await importCatalog(db,claims.sub,input,options.cloud??cloudAdapter(),options.storeJson);
+   else if(catalogImport)result=await importCatalog(db,claims.sub,input,options.cloud??cloudAdapter(),options.storeJson,options.importBudget==null?undefined:{budget:options.importBudget});
    else if(page){result=action==='draft-preview'?await previewDraft(db,input,options.cloud??cloudAdapter()):!page[2]?await createPage(db,input,claims.sub):!action?await savePage(db,page[2],input,claims.sub):action==='publish'?await publishPage(db,page[2],input,claims.sub):action==='unpublish'?await unpublishPage(db,page[2],input,claims.sub):await restoreRevision(db,page[2],page[4],input,claims.sub);res.statusCode=page[2]||action==='draft-preview'?200:201;}
    else{
    const cloud=match[1].startsWith('uploads/')?(options.cloud??cloudAdapter()):null;

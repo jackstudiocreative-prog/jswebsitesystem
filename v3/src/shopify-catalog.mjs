@@ -12,10 +12,13 @@ import {cleanHtml} from '../shared/page-templates.mjs';
 
 export const STORE='https://www.jackstudio.com.my';
 export const PRODUCTS_PER_STEP=6;
+// Vercel stops a request after 30 s and the whole transaction is rolled back. Each step stops starting
+// new work after this budget and tells the admin where to continue.
+export const STEP_BUDGET_MS=15000;
 const bad=m=>{throw new HttpError(400,m);};
 const SLUG=/^[a-z0-9]+(-[a-z0-9]+)*$/;
 export async function storeJson(path){
- const r=await fetch(STORE+path,{headers:{accept:'application/json'},redirect:'follow',signal:AbortSignal.timeout(15000)});
+ const r=await fetch(STORE+path,{headers:{accept:'application/json'},redirect:'follow',signal:AbortSignal.timeout(8000)});
  if(!r.ok)throw new HttpError(502,`The Shopify store answered ${r.status} for ${path}`);
  return r.json();
 }
@@ -35,10 +38,13 @@ async function upsertProduct(db,actor,p,cloud,deadline){
  if(!SLUG.test(p.handle??''))return {handle:p.handle,status:'skipped',error:'Address not usable in V3'};
  // Images: product gallery, at most 20 (V3 limit), imported into the private media library as needed.
  const media=[],byShopifyImage=new Map();
+ // Images already in the library, in one query (each database round trip counts against the time limit).
+ const keys=(p.images??[]).slice(0,20).map(i=>cdnPath(i.src)).filter(x=>x&&SHOPIFY_PATH.test(x)).map(shopifyKey);
+ const ready=new Map(keys.length?(await db.query("SELECT id,object_key FROM media WHERE state='ready' AND object_key = ANY($1::text[])",[keys])).rows.map(r=>[r.object_key,r.id]):[]);
  for(const img of (p.images??[]).slice(0,20)){
   const path=cdnPath(img.src);if(!path||!SHOPIFY_PATH.test(path))continue;
   // Images not in the library yet are imported while time allows; a later run picks up the rest.
-  let id=null;try{id=Date.now()<deadline?await mediaForPath(db,actor,path,cloud):(await db.query("SELECT id FROM media WHERE object_key=$1 AND state='ready'",[shopifyKey(path)])).rows[0]?.id;}catch{id=null;}
+  let id=null;try{id=Date.now()<deadline?await mediaForPath(db,actor,path,cloud):ready.get(shopifyKey(path));}catch{id=null;}
   if(!id)continue;id=String(id);if(media.some(m=>m.media_id===id))continue;
   media.push({media_id:id,alt:String(img.alt??'').slice(0,500)});byShopifyImage.set(String(img.id),id);
  }
@@ -66,7 +72,8 @@ async function upsertProduct(db,actor,p,cloud,deadline){
 }
 
 // One step per request: {step:'collections'} | {step:'products', page} | {step:'memberships', handle}.
-export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson){
+export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson,{budget=STEP_BUDGET_MS}={}){
+ const started=Date.now();
  if(!input||typeof input!=='object'||Array.isArray(input))bad('Send an import step');
  const step=input.step;
  if(step==='collections'){
@@ -76,10 +83,17 @@ export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson){
  }
  if(step==='products'){
   const page=Number(input.page);if(!Number.isInteger(page)||page<1||page>200)bad('Invalid page');
+  const offset=input.offset==null?0:Number(input.offset);if(!Number.isInteger(offset)||offset<0||offset>=PRODUCTS_PER_STEP)bad('Invalid offset');
   const list=(await fetchJson(`/products.json?limit=${PRODUCTS_PER_STEP}&page=${page}`)).products??[];const items=[];
   const deadline=0; // images are imported by the 'images' step first; this step only links them
-  for(const p of list){await db.query('SAVEPOINT p');try{items.push(await upsertProduct(db,actor,p,cloud,deadline));await db.query('RELEASE SAVEPOINT p');}catch(e){await db.query('ROLLBACK TO SAVEPOINT p');items.push({handle:p.handle,status:'failed',error:e.message});}}
-  return {step,page,items,done:list.length<PRODUCTS_PER_STEP};
+  let i=offset;
+  // At least one product per request; then only while the time budget lasts.
+  for(;i<list.length;i++){
+   if(i>offset&&Date.now()-started>budget)break;
+   const p=list[i];await db.query('SAVEPOINT p');try{items.push(await upsertProduct(db,actor,p,cloud,deadline));await db.query('RELEASE SAVEPOINT p');}catch(e){await db.query('ROLLBACK TO SAVEPOINT p');items.push({handle:p.handle,status:'failed',error:e.message});}
+  }
+  const next=i<list.length?i:null;
+  return {step,page,items,next_offset:next,done:next==null&&list.length<PRODUCTS_PER_STEP};
  }
  // Missing product images of one page, at most 4 per request in parallel (each request stays short).
  if(step==='images'){
@@ -87,7 +101,8 @@ export async function importCatalog(db,actor,input,cloud,fetchJson=storeJson){
   const list=(await fetchJson(`/products.json?limit=${PRODUCTS_PER_STEP}&page=${page}`)).products??[];
   const paths=[...new Set(list.flatMap(p=>(p.images??[]).slice(0,20).map(i=>cdnPath(i.src))).filter(x=>x&&SHOPIFY_PATH.test(x)))];
   const have=new Set((await db.query("SELECT object_key FROM media WHERE state='ready' AND object_key = ANY($1::text[])",[paths.map(shopifyKey)])).rows.map(r=>r.object_key));
-  const missing=paths.filter(x=>!have.has(shopifyKey(x))),skip=new Set((input.skip??[]).map(String)),todo=missing.filter(x=>!skip.has(x)).slice(0,4);
+  const missing=paths.filter(x=>!have.has(shopifyKey(x))),skip=new Set((input.skip??[]).map(String)),todo=Date.now()-started>budget?[]:missing.filter(x=>!skip.has(x)).slice(0,4);
+  if(!todo.length&&missing.some(x=>!skip.has(x)))return {step,page,imported:0,failed:[],remaining:missing.length,retry:true};
   const results=await Promise.all(todo.map(path=>cloud.importRemote(SHOPIFY_CDN+path,shopifyKey(path)).then(asset=>({path,asset}),error=>({path,error}))));
   const failed=[];
   for(const {path,asset,error} of results){

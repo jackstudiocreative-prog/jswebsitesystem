@@ -13,7 +13,7 @@ export function cloudAdapter(env=process.env){
   preview:m=>cloudinary.utils.private_download_url(m.object_key,m.format,{...options,type:'authenticated',expires_at:Math.floor(Date.now()/1000)+300,attachment:false}),sign:p=>cloudinary.utils.api_sign_request(p,api_secret),
   inspect:id=>cloudinary.api.resource(id,{...options,resource_type:'image',type:'authenticated'}),
   // Server-side signed upload by URL (Shopify import). Same preset and private delivery as staff uploads.
-  importRemote:(url,public_id)=>cloudinary.uploader.upload(url,{...options,timeout:20000,public_id,asset_folder:'jackstudio-websitesystem/shopify',type:'authenticated',resource_type:'image',overwrite:false,upload_preset:preset})};
+  importRemote:(url,public_id)=>cloudinary.uploader.upload(url,{...options,timeout:12000,public_id,asset_folder:'jackstudio-websitesystem/shopify',type:'authenticated',resource_type:'image',overwrite:false,upload_preset:preset})};
 }
 export function validateAsset(asset,publicId){
  if(asset.public_id!==publicId||asset.resource_type!=='image'||asset.type!=='authenticated'||!asset.asset_id||!Number.isSafeInteger(asset.version)||asset.version<1)throw new HttpError(422,'Unexpected asset');
