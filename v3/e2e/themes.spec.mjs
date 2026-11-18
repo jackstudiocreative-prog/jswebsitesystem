@@ -30,6 +30,9 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
  await expect(page.locator('.jh-header')).toBeVisible();await expect(page.locator('.jf-footer')).toBeVisible();
  await page.locator('.jh-mega-trigger').first().click();await expect(page.locator('a.jh-mega-tile[href="/pages/brand-story"]:visible').first()).toBeVisible();
  await axe(page,'storefront home');
+ await page.locator('.jh-mega-trigger').first().click();
+ await page.evaluate(()=>scrollTo(0,0));
+ await page.screenshot({path:'test-results/brand-previews/storefront-home.png',fullPage:true});
  // Menu pages are built from the original Shopify sections and keep working (links, scripts, CSP).
  await page.goto('/');await page.locator('.jh-nav').getByRole('link',{name:'Our Services',exact:true}).first().click();
  await expect(page).toHaveURL(/\/pages\/our-services$/);await expect(page.locator('.lq-page [data-section-type="service-hero"]')).toBeVisible();

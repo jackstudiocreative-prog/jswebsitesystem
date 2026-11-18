@@ -118,7 +118,7 @@ test('theme renderer escapes text, emits only validated colours and works withou
  assert.match(strict,/data-jt-vars="--cc-accent:#767c82"/);
  assert.match(strict,/From RM79\.20/);assert.ok(!strict.includes('url(x)'),'unsafe swatch value dropped');
  const preview=themeDocument(data,{'9':'https://api.cloudinary.com/x/9'},'https://staging.example');
- assert.match(preview,/style="--cc-accent:#767c82"/);assert.match(preview,/<style>:root\{--jt-background:#f8f4ea/);
+ assert.match(preview,/style="--cc-accent:#767c82"/);assert.match(preview,/<style>:root\{--jt-background:#fbf8f0/);
  assert.match(themeCss(t.settings),/--jt-heading-font:"Bebas Neue"/);
 });
 

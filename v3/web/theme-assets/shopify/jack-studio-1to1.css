@@ -1,5 +1,5 @@
 
-:root{--cream:#F8F4EA;--cream-card:#F9F4E3;--ink:#2B2420;--muted:#7A7263;--sage:#8DA68A;--sage-dark:#8DA68A;--gold:#C4823A;--gold-dark:#C4823A;--taupe:#C9C2AC;--taupe-dark:#B3AA8F;--mocha:#C4823A;--line:#E3DCC8;--white:#fff}
+:root{--cream:#FBF8F0;--cream-card:#F9F4E3;--ink:#401410;--muted:#7A7263;--sage:#8DA68A;--sage-dark:#8DA68A;--gold:#C4823A;--gold-dark:#C4823A;--taupe:#C9C2AC;--taupe-dark:#B3AA8F;--mocha:#C4823A;--line:#E3DCC8;--white:#fff}
 *{box-sizing:border-box}html,body{margin:0;padding:0;width:100%;min-height:100%;overflow-x:hidden;font-family:Inter,Arial,sans-serif;color:var(--ink);background:var(--cream);line-height:1.5;-webkit-font-smoothing:antialiased}
 body{display:block!important}img{max-width:100%;display:block}a{color:inherit;text-decoration:none}button,input,textarea,select{font:inherit}
 h1,h2,h3,h4{font-family:"Bebas Neue",Impact,sans-serif;font-weight:400;text-transform:uppercase;margin:0}

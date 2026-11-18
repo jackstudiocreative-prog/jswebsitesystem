@@ -14,6 +14,8 @@ export async function mountSite(data,main){
  for(const href of main?['/theme.css']:['/theme.css','/styles.css','/page-sections.css'])document.head.querySelector(`link[href="${href}"]`)?.remove();
  await load('link',{rel:'stylesheet',href:'/theme-assets/shopify/base.css'});
  await load('link',{rel:'stylesheet',href:'/theme-assets/shopify/jack-studio-1to1.css'});
+ // Keep the brand stylesheet after dynamically loaded theme CSS.
+ const brand=document.querySelector('link[href="/brand-2026.css"]');if(brand)document.head.append(brand);
  const bar=document.querySelector('.jt-preview-bar');
  const head=document.createElement('div');head.className='lq-header';head.innerHTML=data.header??'';
  const body=document.createElement('main');body.id='MainContent';body.className='lq-page';if(main)body.append(main);else body.innerHTML=data.html??'';

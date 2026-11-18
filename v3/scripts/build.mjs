@@ -5,6 +5,7 @@ import { allowPreview } from './preview-policy.mjs';
 if(process.env.VERCEL && !allowPreview(process.env))throw Error('Only staging branch Preview builds are enabled');
 const root=new URL('../',import.meta.url);
 await mkdir(new URL('public/admin/',root),{recursive:true});
+await copyFile(new URL('shared/brand-2026.css',root),new URL('public/brand-2026.css',root));
 await copyFile(new URL('web/index.html',root),new URL('public/index.html',root));
 await copyFile(new URL('admin/index.html',root),new URL('public/admin/index.html',root));
 await copyFile(new URL('../../jackstudio-admin-mvp/public/styles.css',import.meta.url),new URL('public/styles.css',root));

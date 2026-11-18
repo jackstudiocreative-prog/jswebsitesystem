@@ -21,6 +21,6 @@ export function renderPage(page,media={}){
  return `<main class="js-page">${sections.map(s=>`<div data-section="${esc(s.id)}">${render[s.type](s.settings,media,s)}</div>`).join('')}</main>`;
 }
 export function previewDocument(page,media,origin=''){
- return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(page.seo_title||page.title)}</title><link rel="stylesheet" href="${origin}/styles.css"><link rel="stylesheet" href="${origin}/page-sections.css"><style>a{pointer-events:none}</style></head><body class="js-body">${renderPage(page,media)}</body></html>`;
+ return `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${esc(page.seo_title||page.title)}</title><link rel="stylesheet" href="${origin}/styles.css"><link rel="stylesheet" href="${origin}/page-sections.css"><style>a{pointer-events:none}</style><link rel="stylesheet" href="${origin}/brand-2026.css"></head><body class="js-body">${renderPage(page,media)}</body></html>`;
 }
 export {esc};
