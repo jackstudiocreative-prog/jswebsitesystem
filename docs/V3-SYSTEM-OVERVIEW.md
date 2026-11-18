@@ -40,7 +40,7 @@ New: `PUBLIC_BASE_URL`, `PAYMENT_PROVIDER` (`mock` until sandbox, then `eghl`), 
 2. **Email provider (SMTP)** to send the queued order emails.
 3. **JS Membership** integration contract (customer accounts; today: guest checkout).
 4. **Brand button contrast** (#a97845 is 3.85:1; see V3-QUALITY.md).
-5. **Public image delivery** (product/page images are private originals; public pages show placeholders).
+5. ~~Public image delivery~~ — implemented as publication-checked derivatives, see [V3-STOREFRONT-CATALOG.md](V3-STOREFRONT-CATALOG.md). Verify on hosted Staging with the real Cloudinary account.
 
 ## Acceptance checklist (hosted Staging)
 

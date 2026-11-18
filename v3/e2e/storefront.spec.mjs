@@ -40,3 +40,23 @@ test('published pages render for visitors; private areas stay out of search',asy
  await page.goto('/pages/does-not-exist');await expect(page.getByRole('heading',{name:'Page not found'})).toBeVisible();
  g.check();
 });
+test('collection page lists listed products with images; product and bag show the same images',async({page})=>{
+ const g=guard(page);
+ await page.goto('/collections/e2e-wallets');
+ await expect(page.getByRole('heading',{level:1,name:'E2E Wallets'})).toBeVisible();
+ const card=page.locator('.js-product-card',{hasText:'E2E Card Holder'});
+ await expect(card).toContainText('RM 129.00');
+ await expect(card.locator('img')).toHaveAttribute('src',/\/api\/v3\/storefront\/media\/1\?w=960$/);
+ await expect(card.locator('img')).toHaveJSProperty('complete',true);
+ await expect(page.locator('.js-product-card',{hasText:'E2E Weekender'}).locator('.js-image-placeholder')).toBeVisible();
+ await axe(page,'collection');
+ await page.getByLabel('Sort by').selectOption('price-desc');await expect(page).toHaveURL(/sort=price-desc/);
+ await expect(page.locator('.js-product-card').first()).toContainText('E2E Weekender');
+ await card.click();await expect(page).toHaveURL(/\/products\/e2e-card-holder$/);
+ await expect(page.locator('.js-gallery-main img')).toHaveAttribute('srcset',/w=320 /);
+ await expect(page.getByRole('navigation',{name:'Breadcrumb'}).getByRole('link',{name:'E2E Wallets'})).toBeVisible();
+ await page.getByRole('button',{name:'Add to bag'}).click();await expect(page.getByText('Added to your bag.')).toBeVisible();
+ await page.goto('/cart');await expect(page.locator('.js-line img.js-line-image').first()).toHaveAttribute('src',/\/api\/v3\/storefront\/media\/1\?w=960$/);
+ await page.goto('/collections/no-such-collection');await expect(page.getByRole('heading',{name:'Collection not found'})).toBeVisible();
+ g.check();
+});

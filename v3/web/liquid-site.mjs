@@ -2,6 +2,9 @@
 // The HTML comes from the server (or, in a staff preview tab, from the admin); the theme's stylesheet,
 // the small runtime and the section scripts load as same-site files.
 import {previewPages,previewInfo} from './theme-behaviour.mjs';
+import './cart-bridge.mjs';
+import './image-fallback.mjs';
+import {updateBadges} from './bag.mjs';
 export async function siteData(slug){
  const preview=previewPages();if(preview){previewInfo();return preview[slug]??null;}
  const r=await fetch('/api/v3/storefront/theme/pages/'+slug).catch(()=>null);return r?.ok?r.json():null;
@@ -14,6 +17,8 @@ export async function mountSite(data,main){
  for(const href of main?['/theme.css']:['/theme.css','/styles.css','/page-sections.css'])document.head.querySelector(`link[href="${href}"]`)?.remove();
  await load('link',{rel:'stylesheet',href:'/theme-assets/shopify/base.css'});
  await load('link',{rel:'stylesheet',href:'/theme-assets/shopify/jack-studio-1to1.css'});
+ // Keep the brand stylesheet after dynamically loaded theme CSS.
+ const brand=document.querySelector('link[href="/brand-2026.css"]');if(brand)document.head.append(brand);
  const bar=document.querySelector('.jt-preview-bar');
  const head=document.createElement('div');head.className='lq-header';head.innerHTML=data.header??'';
  const body=document.createElement('main');body.id='MainContent';body.className='lq-page';if(main)body.append(main);else body.innerHTML=data.html??'';
@@ -22,4 +27,7 @@ export async function mountSite(data,main){
  document.body.className='lq-body';document.body.append(head,body,foot);if(bar)document.body.prepend(bar);
  await load('script',{src:'/theme-assets/shopify/runtime.js'});await load('script',{src:'/theme-assets/shopify/jack-studio.js'});
  if(data.scripts?.length)await load('script',{src:'/api/v3/storefront/theme/scripts.js?s='+encodeURIComponent(data.scripts.join(','))});
+ updateBadges();
+ // Header/menu scripts are attached: tests and tooling can wait for this.
+ document.body.dataset.siteReady='1';
 }

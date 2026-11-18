@@ -82,7 +82,7 @@ test('themes API: add, edit, preview, publish, duplicate, remove, public theme a
   assert.equal((await h.request(`themes/${theme.id}/publish`,'POST',{revision:saved.body.revision},'viewer')).status,403);
   const live=await h.request(`themes/${theme.id}/publish`,'POST',{revision:saved.body.revision});assert.equal(live.body.is_live,true);
   const pub=await h.request('storefront/theme','GET',undefined,null);assert.equal(pub.status,200);
-  assert.equal(pub.body.theme.sections[0].type,'hero_banner');assert.equal(pub.body.media,undefined);assert.ok(!JSON.stringify(pub.body).includes('cloudinary'));
+  assert.equal(pub.body.theme.sections[0].type,'hero_banner');for(const u of Object.values(pub.body.media??{}))assert.match(u,/^\/api\/v3\/storefront\/media\/\d+\?w=\d+$/);assert.ok(!JSON.stringify(pub.body).includes('cloudinary'));
   assert.equal(pub.body.theme.sections.find(s=>s.type==='product_tabs').tabs[0][0].handle,'bifold-wallet');
   const second=await h.request(`themes/${copy.id}/publish`,'POST',{revision:copy.revision});assert.equal(second.body.is_live,true);
   list=(await h.request('themes')).body.items;assert.deepEqual(list.map(t=>[t.name,t.is_live]),[['Copy of Spring 2026',true],['Spring 2026',false]]);
@@ -118,7 +118,7 @@ test('theme renderer escapes text, emits only validated colours and works withou
  assert.match(strict,/data-jt-vars="--cc-accent:#767c82"/);
  assert.match(strict,/From RM79\.20/);assert.ok(!strict.includes('url(x)'),'unsafe swatch value dropped');
  const preview=themeDocument(data,{'9':'https://api.cloudinary.com/x/9'},'https://staging.example');
- assert.match(preview,/style="--cc-accent:#767c82"/);assert.match(preview,/<style>:root\{--jt-background:#f8f4ea/);
+ assert.match(preview,/style="--cc-accent:#767c82"/);assert.match(preview,/<style>:root\{--jt-background:#fbf8f0/);
  assert.match(themeCss(t.settings),/--jt-heading-font:"Bebas Neue"/);
 });
 

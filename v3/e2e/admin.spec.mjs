@@ -19,7 +19,7 @@ test('staff create a product with variants, adjust stock and see it in inventory
 });
 test('staff build a page from a template, preview it and publish it to the website',async({page})=>{
  const g=guard(page);const title='E2E Story '+Date.now();
- await page.goto('/admin');await nav(page,'Website');await axe(page,'pages list');
+ await page.goto('/admin');await nav(page,'Pages');await axe(page,'pages list');
  await page.getByLabel('Start from').selectOption('brand-story');await page.getByLabel('Page title (optional for templates)').fill(title);await page.getByRole('button',{name:'Create page'}).click();
  await expect(page.getByRole('heading',{name:'Edit page'})).toBeVisible();
  await page.locator('.section-adder select').selectOption('banner');await page.getByRole('button',{name:'Add section'}).click();

@@ -15,7 +15,7 @@ export function createWebsite(h){
  async function list(t){
   const tools=el('form',undefined,'toolbar'),q=field('Search pages',search,'search'),filter=select([['','All statuses'],['draft','Draft'],['published','Published'],['changes','Unpublished changes']],status);
   filter.setAttribute('aria-label','Filter by status');tools.append(q.wrap,filter,el('button','Apply filters'));root.append(tools);
-  tools.addEventListener('submit',e=>{e.preventDefault();search=q.input.value;status=filter.value;offset=0;navigate('Website').catch(err=>notify(err.message));});
+  tools.addEventListener('submit',e=>{e.preventDefault();search=q.input.value;status=filter.value;offset=0;navigate('Pages').catch(err=>notify(err.message));});
   const create=el('section',undefined,'card page-create'),template=select(Object.entries(TEMPLATES).map(([k,v])=>[k,v.label]),'blank'),title=field('Page title (optional for templates)','');title.input.maxLength=120;
   const tLabel=el('label','Start from');tLabel.append(template);create.append(el('h2','Create a page'),el('p','Start blank or from a Jack Studio layout. New pages stay private until you publish them.','muted'),tLabel,title.wrap,button('Create page',async()=>{
    const draft=TEMPLATES[template.value].build();if(title.input.value.trim())draft.title=title.input.value.trim();
@@ -28,7 +28,7 @@ export function createWebsite(h){
   root.append(el('p',`${data.total} pages · Showing ${data.items.length?offset+1:0}–${offset+data.items.length}`,'muted'));
   if(!data.items.length)empty(search||status?'No matching pages. Adjust your filters.':'No pages yet. Create your first page below.');
   else{const body=table(['Page','URL','Status','Live version','Sections','Updated','Action']);for(const p of data.items){const tr=el('tr');cell(tr,p.title);cell(tr,'/pages/'+p.slug);const st=el('td');st.append(statusBadge(p.status));tr.append(st);cell(tr,p.live_number?`v${p.live_number}`:'—');cell(tr,String(p.section_count));cell(tr,when(p.updated_at));const td=el('td');td.append(button(readOnly?'View':'Edit',()=>edit(p.id)));tr.append(td);body.append(tr);}}
-  const pages=el('div',undefined,'pagination');pages.append(button('Previous',()=>{offset=Math.max(0,offset-25);return navigate('Website');},offset===0),button('Next',()=>{offset+=25;return navigate('Website');},offset+data.items.length>=data.total));root.append(pages,create);
+  const pages=el('div',undefined,'pagination');pages.append(button('Previous',()=>{offset=Math.max(0,offset-25);return navigate('Pages');},offset===0),button('Next',()=>{offset+=25;return navigate('Pages');},offset+data.items.length>=data.total));root.append(pages,create);
  }
  async function edit(id){
   const t=ticket();const [page,collections]=await Promise.all([api('pages/'+id),all('collections')]);if(!current(t))return;
@@ -50,7 +50,7 @@ export function createWebsite(h){
   const actions=el('div',undefined,'actions');
   actions.append(save,button(dirty?'Save and publish':'Publish',async()=>{let rev=page.revision;if(dirty)rev=(await persist()).revision;await api(`pages/${id}/publish`,{revision:rev},'POST');finish('Page published to the website.');},readOnly),
    button('Unpublish',async()=>{if(!window.confirm('Remove this page from the website? The draft and versions are kept.'))return;await api(`pages/${id}/unpublish`,{revision:page.revision},'POST');finish('Page removed from the website.');},readOnly||page.status==='draft'),
-   button('Back to pages',()=>navigate('Website')));
+   button('Back to pages',()=>navigate('Pages')));
   aside.append(actions,el('h2','Versions'));
   if(!page.revisions.length)aside.append(el('p','Published versions appear here.','muted'));
   for(const r of page.revisions){const row=el('div',undefined,'version-row');row.append(el('strong',`v${r.number}`),el('span',`${when(r.published_at)} · ${r.published_by_role??'staff'} ${String(r.published_by).slice(0,8)}`,'muted'));if(r.live)row.append(el('span','Live','badge active'));

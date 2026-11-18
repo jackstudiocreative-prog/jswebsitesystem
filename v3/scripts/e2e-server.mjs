@@ -27,7 +27,7 @@ for(const label of ['card-holder-brown.jpg','card-holder-black.jpg','weekender.j
 for(const [name,[w,h]] of Object.entries(JSON.parse(await readFile(new URL('e2e/shopify-image-sizes.json',root),'utf8'))))await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,format,label,width,height) VALUES ($1,'image/png',200000,'ready','editor','png',$2,$3,$4)",[shopifyKey('files/'+name),name,w,h]);
 await db.query('SET ROLE jackstudio_api');
 const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.repeat(10),actionUrl:`http://127.0.0.1:${port}/pay/mock`,baseUrl:'https://e2e.test'});
-const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id}});
+const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id,publicDerivative:(m,w)=>'/theme-assets/virtual-showroom-cover.jpg?id='+m.id+'&w='+w}});
 const adminJs=(await build({entryPoints:[fileURLToPath(new URL('e2e/admin-entry.mjs',root))],bundle:true,format:'esm',write:false})).outputFiles[0].text;
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.woff2':'font/woff2','.jpg':'image/jpeg','.webp':'image/webp'};
 createServer(async(req,res)=>{

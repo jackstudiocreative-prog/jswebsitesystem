@@ -6,7 +6,9 @@ import { list,save,detail,dashboard } from './catalog.mjs';
 import { adjust,inventoryList,adjustmentList } from './inventory.mjs';
 import { listPages,pageDetail,createPage,savePage,publishPage,unpublishPage,restoreRevision,previewPage,previewDraft,publicPage } from './pages.mjs';
 import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,autofillTheme,previewTheme,publicThemePage,previewThemePages,themeScripts,previewThemeDraft,publicTheme } from './themes.mjs';
-import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates,storefrontProduct } from './commerce.mjs';
+import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates } from './commerce.mjs';
+import { storefrontProduct,storefrontCollection,storefrontIndex } from './storefront.mjs';
+import { deliverPublicMedia,CACHE_SECONDS } from './public-media.mjs';
 import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
 import { sitemap,robots } from './seo.mjs';
@@ -49,11 +51,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(path==='/robots.txt'){res.setHeader('Content-Type','text/plain; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300');res.end(robots(base,process.env.SITE_INDEXING==='on'));return;}
    db=await pool.connect();res.setHeader('Content-Type','application/xml; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300');res.end(await sitemap(db,base));return;
   }
-  if(path==='/api/v3/storefront'&&req.method==='GET'){
-   db=await pool.connect();
-   const rows=(await db.query("SELECT p.id,p.title,p.handle,p.description FROM products p WHERE p.status='active' AND EXISTS(SELECT 1 FROM product_collections pc JOIN collections c ON c.id=pc.collection_id WHERE pc.product_id=p.id AND c.status='active') ORDER BY p.id LIMIT 200")).rows;
-   res.end(JSON.stringify({products:rows,checkoutAvailable:false}));return;
-  }
+  if(path==='/api/v3/storefront'&&req.method==='GET'){db=await pool.connect();res.end(JSON.stringify(await storefrontIndex(db)));return;}
   // Public published pages (no staff token). Drafts, hidden sections and private images are never exposed.
   const published=path.match(/^\/api\/v3\/storefront\/pages\/([^/]{1,100})$/);
   if(published){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicPage(db,published[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
@@ -62,6 +60,22 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   if(themePage){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicThemePage(db,themePage[1]);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
   if(path==='/api/v3/storefront/theme/scripts.js'){if(req.method!=='GET')throw new HttpError(405,'Method not available');const js=await themeScripts(url.searchParams.get('s'));res.setHeader('Content-Type','text/javascript; charset=utf-8');res.setHeader('Cache-Control','public, max-age=300, s-maxage=3600');res.end(js);return;}
   if(path==='/api/v3/storefront/theme'){if(req.method!=='GET')throw new HttpError(405,'Method not available');db=await pool.connect();const data=await publicTheme(db);res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;}
+  // Public product/page images: publication-checked redirect to a fixed-width derivative (src/public-media.mjs).
+  const pubMedia=path.match(/^\/api\/v3\/storefront\/media\/([1-9]\d{0,17})$/);
+  if(pubMedia){
+   if(req.method!=='GET')throw new HttpError(405,'Method not available');
+   db=await pool.connect();
+   let cloud=options.cloud;if(!cloud){try{cloud=cloudAdapter();}catch{cloud=null;}}
+   const location=await deliverPublicMedia(db,pubMedia[1],url.searchParams.get('w'),cloud);
+   res.statusCode=302;res.setHeader('Location',location);res.setHeader('Cache-Control',`public, max-age=${CACHE_SECONDS}, s-maxage=${CACHE_SECONDS}`);res.end('{}');return;
+  }
+  // Public collection listing: /api/v3/storefront/collections/<handle> ('all' = every listed product).
+  const pubCollection=path.match(/^\/api\/v3\/storefront\/collections\/([a-z0-9]+(?:-[a-z0-9]+)*)$/);
+  if(pubCollection){
+   if(req.method!=='GET')throw new HttpError(405,'Method not available');
+   db=await pool.connect();const data=await storefrontCollection(db,pubCollection[1],url.searchParams);
+   res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(data));return;
+  }
   // Public storefront commerce: bag pricing, checkout and order status (the order access token stays in
   // the request body, never the URL).
   const shop=path.match(/^\/api\/v3\/storefront\/(products\/([a-z0-9-]{1,100})|cart|checkout|shipping-rates|orders\/(JSW\d{1,12})\/(status|pay))$/);

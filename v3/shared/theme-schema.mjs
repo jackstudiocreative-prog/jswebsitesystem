@@ -19,12 +19,12 @@ export const ICONS=[['shield','Shield'],['target','Target'],['group','Group'],['
 
 // Global style settings ("Theme settings" in the editor).
 export const THEME_SETTINGS=[
- color('background','Page background','#f8f4ea'),
- color('text','Text','#2b2420'),
- color('heading','Headings','#292724'),
- color('muted','Secondary text','#716b63'),
- color('accent','Buttons','#c38239'),
- color('accent_hover','Buttons (hover)','#a8702f'),
+ color('background','Page background','#fbf8f0'),
+ color('text','Text','#401410'),
+ color('heading','Headings','#6b5d45'),
+ color('muted','Secondary text','#6b5d45'),
+ color('accent','Buttons','#6b5d45'),
+ color('accent_hover','Buttons (hover)','#401410'),
  choice('heading_font','Heading font',[['bebas','Bebas Neue'],['inter','Inter'],['georgia','Georgia']]),
  choice('body_font','Body font',[['inter','Inter'],['georgia','Georgia'],['system','System font']]),
  text('home_seo_title','Home page SEO title',70),
@@ -45,7 +45,7 @@ export const THEME_SECTIONS=Object.freeze({
   link('search_link','Search icon link (hidden when empty)'),link('account_link','Account icon link (hidden when empty)'),link('wishlist_link','Wishlist icon link (hidden when empty)'),
   check('show_cart','Show bag icon',true),
   link('facebook','Facebook (menu drawer)'),link('instagram','Instagram (menu drawer)'),link('tiktok','TikTok (menu drawer)'),link('youtube','YouTube (menu drawer)'),
-  color('bg','Background','#f5f1e8'),color('fg','Text and icons','#292724')]},
+  color('bg','Background','#f5f1e8'),color('fg','Text and icons','#6b5d45')]},
  hero_banner:{label:'Hero banner',group:'template',fields:[
   text('eyebrow','Eyebrow',60),text('heading','Heading',90),area('body','Text',300),media('image_id','Background image'),
   text('button_label','Button label',40),link('button_link','Button link')]},
@@ -55,7 +55,7 @@ export const THEME_SECTIONS=Object.freeze({
   color('bg','Background','#e9e2d5')]},
  collection_cards:{label:'Collection cards',group:'template',fields:[
   text('heading','Heading',90),text('link_label','"View all" label',40),link('link','"View all" link'),
-  list('cards','Cards',12,[media('image_id','Image'),text('title','Title',40,{required:true}),link('link','Link'),color('accent','Label colour','#292724')],{itemLabel:'title'}),
+  list('cards','Cards',12,[media('image_id','Image'),text('title','Title',40,{required:true}),link('link','Link'),color('accent','Label colour','#6b5d45')],{itemLabel:'title'}),
   color('bg','Background','#f5f1e8')]},
  promise_split:{label:'Feature and statistic',group:'template',fields:[
   media('image_id','Feature image'),text('heading','Feature heading',60),area('text','Feature text',300),text('button_label','Feature button label',40),link('button_link','Feature button link'),color('bg','Feature background','#e9e2d5'),
@@ -81,7 +81,7 @@ export const THEME_SECTIONS=Object.freeze({
   text('contact_heading','Contact heading',40),text('email','Email',120),text('company','Company name',120),area('address','Address',300),
   link('facebook','Facebook'),link('instagram','Instagram'),link('youtube','YouTube'),link('tiktok','TikTok'),
   check('newsletter','Show newsletter sign-up',true),text('newsletter_label','Newsletter label',80),text('newsletter_placeholder','Newsletter placeholder',60),
-  text('copyright','Copyright line',120),color('bg','Background','#f8f4ea'),color('fg','Text','#2b2420')]}
+  text('copyright','Copyright line',120),color('bg','Background','#fbf8f0'),color('fg','Text','#401410')]}
 });
 // Page sections (Hero, Image + Text, Product Grid, Banner, Text) can also be added to the template.
 export const TEMPLATE_TYPES=[...Object.entries(THEME_SECTIONS).filter(([,v])=>v.group==='template').map(([k])=>k),...Object.keys(SECTION_TYPES)];

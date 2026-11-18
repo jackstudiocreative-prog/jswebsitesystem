@@ -4,6 +4,7 @@ import {resolvePageSections} from './pages.mjs';
 import {HttpError} from './auth.mjs';
 import {autofillThemeImages} from './shopify-import.mjs';
 import {renderPage,scriptBundle} from './liquid.mjs';
+import {PUBLIC_CLOUD} from './media-urls.mjs';
 import {templateFor,SITE_PAGES,SECTION_SCHEMAS} from '../shared/page-templates.mjs';
 // Online Store themes. One theme can be live; the rest are the theme library. As in Shopify, saving
 // the live theme changes the storefront immediately; staff duplicate it to work on a private copy.
@@ -133,7 +134,7 @@ export async function previewThemeDraft(db,input,cloud){
 // pages that are not built from the theme).
 async function pageHtml(db,content,slug,cloud){
  const page=slug==='_frame'?{title:'',order:[],sections:{}}:templateFor(content,slug);if(!page)return null;
- const opts={mediaUrl:cloud?m=>cloud.preview(m):null},out={},scripts=[];
+ const opts={mediaUrl:cloud?m=>cloud.preview(m):null,publicImages:!!cloud?.public},out={},scripts=[];
  for(const [part,t] of [['header',templateFor(content,'header')],['main',page],['footer',templateFor(content,'footer')]]){
   const r=await renderPage(db,slug==='_frame'?'home':slug,{...t,title:page.title,content:page.content},opts);out[part]=r.html;
   const ids=new Set(r.scripts.map(s=>s.id));scripts.push(...t.order.filter(id=>ids.has(id)).map(id=>`${t.sections[id].type}:${id}`));
@@ -143,7 +144,7 @@ async function pageHtml(db,content,slug,cloud){
 export async function publicThemePage(db,slug){
  if(!SITE_PAGES.includes(slug)&&slug!=='_frame')throw new HttpError(404,'Page not found');
  const theme=(await db.query('SELECT content FROM themes WHERE is_live AND NOT archived')).rows[0];if(!theme)throw new HttpError(404,'No live theme');
- return pageHtml(db,content(theme.content),slug,null);
+ return pageHtml(db,content(theme.content),slug,PUBLIC_CLOUD);
 }
 // Staff preview of unsaved pages (all pages, or one with {page}); images use signed private previews.
 export async function previewThemePages(db,input,cloud){
@@ -161,10 +162,11 @@ export async function themeScripts(spec){
  for(const x of list){const [type,id]=x.split(':');scripts.push(...(await renderPage(none,'scripts',{order:[id],sections:{[id]:{type,settings:{},blocks:{},block_order:[]}}})).scripts);}
  return scriptBundle(scripts);
 }
-// Public, unauthenticated: the live theme only. Images are referenced by ID; public image
-// delivery is not enabled yet (originals stay private), so the storefront shows placeholders.
+// Public, unauthenticated: the live theme only. Images use checked public derivatives
+// (src/public-media.mjs); originals stay private.
 export async function publicTheme(db){
  const theme=(await db.query('SELECT content FROM themes WHERE is_live AND NOT archived')).rows[0];
  if(!theme)throw new HttpError(404,'No live theme');
- return {theme:await resolveTheme(db,content(theme.content)),checkoutAvailable:false};
+ const resolved=await resolveTheme(db,content(theme.content));
+ return {theme:resolved,media:await mediaFor(db,resolved,PUBLIC_CLOUD),checkoutAvailable:false};
 }

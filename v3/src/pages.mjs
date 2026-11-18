@@ -1,5 +1,6 @@
 import rules from '../../shared/catalog.js';
 import {normalizeSections} from '../shared/page-schema.mjs';
+import {PUBLIC_CLOUD} from './media-urls.mjs';
 import {HttpError} from './auth.mjs';
 // Website Editor: drafts live on `pages`; publishing appends an immutable `page_revisions` snapshot
 // and points the page at it. Every write runs in the request transaction with a row lock and an
@@ -131,12 +132,12 @@ export async function previewDraft(db,input,cloud){
  object(input);const row=fields({title:'Preview',...input},{}),list=sections(input.sections??[]);await checkReferences(db,list);
  return renderData(db,{...row,sections:list},cloud);
 }
-// Public, unauthenticated: published content only. Images are referenced by ID; public image
-// delivery is not enabled yet (originals stay private).
+// Public, unauthenticated: published content only. Images use checked public derivatives
+// (src/public-media.mjs); originals stay private.
 export async function publicPage(db,slug){
  if(!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)||slug.length>80)throw new HttpError(404,'Page not found');
  const page=(await db.query('SELECT r.slug,r.title,r.seo_title,r.seo_description,r.sections,r.published_at FROM pages p JOIN page_revisions r ON r.id=p.published_revision_id WHERE r.slug=$1',[slug])).rows[0];
- if(page){const {sections:list,...rest}=page;return {page:{...rest,sections:await resolve(db,list)},checkoutAvailable:false};}
+ if(page){const {sections:raw,...rest}=page;const data=await renderData(db,{...rest,sections:raw},PUBLIC_CLOUD);return {page:{...rest,sections:data.page.sections},media:data.media,checkoutAvailable:false};}
  const redirect=(await db.query('SELECT live.slug FROM page_redirects r JOIN pages p ON p.id=r.page_id JOIN page_revisions live ON live.id=p.published_revision_id WHERE r.from_slug=$1',[slug])).rows[0];
  if(redirect)return {redirect_to:redirect.slug};
  throw new HttpError(404,'Page not found');
