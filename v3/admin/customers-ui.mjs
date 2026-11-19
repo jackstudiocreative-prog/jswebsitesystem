@@ -21,7 +21,7 @@ export function createCustomers(h){
   const params=new URLSearchParams({limit:'50',offset:String(offset),sort});if(q)params.set('q',q);if(sub)params.set('subscription',sub);
   const data=await api('customers?'+params);if(!current(t))return;
   const actions=root.querySelector('.page-actions');
-  if(actions&&!readOnly){const imp=button('Import from Shopify',()=>importer());imp.classList.add(data.imported&&data.total?'secondary':'primary');actions.append(imp);}
+  if(actions&&!readOnly&&data.imported){const imp=button('Import from Shopify',()=>importer());imp.classList.add(data.imported&&data.total?'secondary':'primary');actions.append(imp);}
   if(!data.imported)root.append(el('p','Shopify customer import needs database migration 014. Until then this list shows people who paid for an order here.','warning-note'));
   root.append(el('p',`${data.total} customer${data.total===1?'':'s'}${data.imported?` · ${data.subscribed} subscribed to email`:''}`,'result-count'));
   if(!data.items.length){const box=el('div',undefined,'empty-state');box.append(el('p',q||sub?'No matching customers.':'No customers yet. Import your Shopify customers, or they appear after their first paid order.'));if(!q&&!sub&&data.imported&&!readOnly)box.append(button('Import from Shopify',()=>importer()));root.append(box);return;}
@@ -83,19 +83,19 @@ export function createCustomers(h){
    info.append(el('p',`${rows.length} customers in the file · ${subscribed} subscribed to email`,'result-count'));go.disabled=readOnly||!rows.length;
   });
   go.addEventListener('click',async()=>{
-   go.disabled=true;file.input.disabled=true;const progress=el('p','Importing…','result-count');progress.setAttribute('role','status');info.append(progress);
-   const total={created:0,updated:0,unchanged:0,skipped:[]};let i=0;
+   go.disabled=true;file.input.disabled=true;info.querySelectorAll('.import-progress,details').forEach(n=>n.remove());const progress=el('p','Importing…','result-count import-progress');progress.setAttribute('role','status');info.append(progress);
+   const total={created:0,updated:0,unchanged:0,skipped:[]};let i=0,done=0;
    try{
     while(i<rows.length){
      // Batches stay under the API's request size limit.
      const batch=[];let bytes=20;while(i<rows.length&&batch.length<MAX_ROWS){const size=JSON.stringify(rows[i]).length+1;if(batch.length&&bytes+size>MAX_BYTES)break;batch.push(rows[i]);bytes+=size;i++;}
      const r=await api('customers/import',{rows:batch,first_line:i-batch.length+2});
-     total.created+=r.created;total.updated+=r.updated;total.unchanged+=r.unchanged;total.skipped.push(...r.skipped);
-     progress.textContent=`Imported ${i} of ${rows.length}…`;
+     total.created+=r.created;total.updated+=r.updated;total.unchanged+=r.unchanged;total.skipped.push(...r.skipped);done=i;
+     progress.textContent=`Imported ${done} of ${rows.length}…`;
     }
     progress.textContent=`Done: ${total.created} new, ${total.updated} updated, ${total.unchanged} unchanged${total.skipped.length?`, ${total.skipped.length} skipped`:''}.`;
     notify('Customers imported.');
-   }catch(e){progress.textContent=`Stopped after ${i} rows: ${e.message}. Importing the file again continues safely.`;go.disabled=false;}
+   }catch(e){progress.textContent=done?`Stopped after ${done} of ${rows.length} rows: ${e.message} Importing the file again continues safely.`:`Nothing was imported: ${e.message}`;progress.classList.add('warning-note');go.disabled=false;}
    if(total.skipped.length){const d=el('details');d.append(el('summary',`${total.skipped.length} rows skipped`));const ul=el('ul');for(const s of total.skipped.slice(0,200))ul.append(el('li',`Line ${s.line}: ${s.reason}`));d.append(ul);info.append(d);}
    file.input.disabled=false;
   });
