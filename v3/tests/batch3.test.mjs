@@ -65,12 +65,13 @@ test('collection filters: stock, price range and option values; facets from the 
  }finally{await h.close();}
 });
 
-test('theme: entry points for missing features are not shown (account until customer accounts exist)',async()=>{
+test('theme: the account icon leads to Jack Studio Club; no Shopify account pages',async()=>{
  const content=PRESETS['jack-studio-2026'].build();
  const header=templateFor(content,'header');
  const fake={query:async()=>({rows:[]})};
  const html=(await renderPage(fake,'home',header,{})).html??'';
- assert.ok(!html.includes('/account/login'),'no account link');
+ assert.ok(!html.includes('/account'),'no Shopify account links');
+ assert.ok(html.includes('href="https://club.jackstudio.com.my/" aria-label="Account"'),'account icon → member club');
  assert.ok(html.includes('/search'),'search link kept');
 });
 

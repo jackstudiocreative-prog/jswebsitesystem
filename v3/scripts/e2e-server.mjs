@@ -18,6 +18,7 @@ const root=new URL('../',import.meta.url),port=Number(process.env.E2E_PORT??4317
 const config=JSON.parse(await readFile(new URL('vercel.json',root),'utf8'));
 // vercel.json patterns -> RegExp (":name*" any, ":name" one segment; groups are already regex).
 const pattern=src=>new RegExp('^'+src.replace(/:[a-z]+\*/g,'.*').replace(/:[a-z]+/g,'[^/]+')+'$');
+const redirects=(config.redirects??[]).map(r=>[pattern(r.source),r.destination,r.permanent?308:307]);
 const rewrites=config.rewrites.map(r=>[pattern(r.source),r.destination]),headers=config.headers.map(h=>[pattern(h.source),h.headers]);
 const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
 await migrate(sql);
@@ -33,6 +34,7 @@ const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'
 createServer(async(req,res)=>{
  const path=new URL(req.url,'http://x').pathname;
  for(const [re,list] of headers)if(re.test(path))for(const h of list)res.setHeader(h.key,h.value);
+ for(const [re,dest,code] of redirects)if(re.test(path)){res.statusCode=code;res.setHeader('Location',dest);return res.end();}
  let target=path;for(const [re,dest] of rewrites)if(re.test(path)){target=dest;break;}
  if(target==='/api/index')return api(req,res);
  if(target==='/admin.js'){res.setHeader('Content-Type','text/javascript');return res.end(adminJs);}
