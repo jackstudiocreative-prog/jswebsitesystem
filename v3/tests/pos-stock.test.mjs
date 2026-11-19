@@ -60,6 +60,32 @@ test('mPOS client: X-API-Key header, required filters, every page, and safe erro
  await assert.rejects(posClientFromEnv({MPOS_API_KEY:'k'},async()=>{throw Object.assign(new Error('t'),{name:'TimeoutError'});}).fetchStock(),e=>e.status===504);
 });
 
+test('mPOS client: a broken 500-row reply is read again at 100 rows; a reply that is never JSON says what came back',async()=>{
+ const all=Array.from({length:230},(_,i)=>row(i+1,'S'+i,1,1)),sizes=[];
+ const page=(u,size)=>{const p=Number(u.searchParams.get('page'));return {page:p,pageSize:size,totalCount:all.length,items:all.slice((p-1)*size,p*size)};};
+ // 500 rows: JSON cut off part-way (as when the server fails while writing); 100 rows: fine.
+ const truncating=posClientFromEnv({MPOS_API_KEY:'secret-xyz-123'},async url=>{const u=new URL(url),size=Number(u.searchParams.get('pageSize'));sizes.push(size);const json=JSON.stringify(page(u,size));return new Response(size===500?json.slice(0,900):json,{status:200,headers:{'content-type':'application/json; charset=utf-8'}});});
+ const errors=[],log=console.error;console.error=(...a)=>errors.push(a);
+ try{
+  const feed=await truncating.fetchStock();
+  assert.equal(feed.rows.length,230);assert.equal(feed.page_size,100);assert.deepEqual(sizes,[500,100,100,100]);
+  assert.equal(errors.length,1,'the broken reply is logged once');assert.match(JSON.stringify(errors[0]),/not JSON/);
+  // HTML at every size: the message names status, type, length and the start of the page, never the key.
+  const html=posClientFromEnv({MPOS_API_KEY:'secret-xyz-123'},async()=>new Response('<!DOCTYPE html>\n<html><title>Error</title><body>An unhandled error has occurred.</body></html>',{status:200,headers:{'content-type':'text/html; charset=utf-8'}}));
+  await assert.rejects(html.fetchStock(),e=>{
+   assert.equal(e.status,502);
+   assert.match(e.message,/not JSON \(HTTP 200, text\/html; charset=utf-8, \d+ characters, starts "<!DOCTYPE html> <html><title>Error<\/title>/);
+   assert.match(e.message,/Also failed with 100 rows per page\. Nothing was changed\.$/);
+   assert.ok(!e.message.includes('secret-xyz-123'));return true;});
+  assert.ok(errors.every(a=>!JSON.stringify(a).includes('secret-xyz-123')),'logs never contain the key');
+  // Empty 200 reply and a bare JSON list.
+  await assert.rejects(posClientFromEnv({MPOS_API_KEY:'k'},async()=>new Response('',{status:200})).fetchStock(),e=>/0 characters/.test(e.message));
+  const bare=await posClientFromEnv({MPOS_API_KEY:'k'},async()=>Response.json(all.slice(0,3))).fetchStock();assert.equal(bare.rows.length,3);
+  // Server errors keep their status and the start of the reply.
+  await assert.rejects(posClientFromEnv({MPOS_API_KEY:'k'},async()=>new Response('{"title":"Internal Server Error"}',{status:500})).fetchStock(),e=>/HTTP 500: "\{"title":"Internal Server Error"\}"/.test(e.message));
+ }finally{console.error=log;}
+});
+
 async function harness(feedRows){
  const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  await migrate(sql);await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");await db.query('SET ROLE jackstudio_api');

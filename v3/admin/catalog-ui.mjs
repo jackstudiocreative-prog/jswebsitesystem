@@ -300,7 +300,7 @@ export function mountAdmin(api,role,notify,account={}){
   function show(r){
    out.replaceChildren();
    const wh=r.pos.warehouses.map(w=>w.name||w.code||String(w.id)).join(', ')||'none';
-   out.append(el('p',`mPOS: ${r.pos.rows} stock rows from ${r.pos.warehouses.length} warehouse${r.pos.warehouses.length===1?'':'s'} (${wh}) → ${r.pos.stock_codes} SKUs in stock.`));
+   out.append(el('p',`mPOS: ${r.pos.rows} stock rows from ${r.pos.warehouses.length} warehouse${r.pos.warehouses.length===1?'':'s'} (${wh}) → ${r.pos.stock_codes} SKUs in stock.${r.pos.page_size&&r.pos.page_size<500?` (Read ${r.pos.page_size} rows at a time: mPOS could not send 500 at once.)`:''}`));
    out.append(el('p',r.dry_run?`Matched ${r.matched} website variants: ${r.changed} will change, ${r.unchanged} already correct.`:`Done: ${r.changed} variants updated, ${r.unchanged} already correct.`,r.dry_run?'':'pos-done'));
    if(r.pos.blank_codes||r.pos.rounded_quantities||r.variants_without_sku)out.append(el('p',[r.pos.blank_codes?`${r.pos.blank_codes} mPOS rows have no stock code`:'',r.pos.rounded_quantities?`${r.pos.rounded_quantities} quantities were negative or fractional and were rounded down (never below 0)`:'',r.variants_without_sku?`${r.variants_without_sku} website variants have no SKU and were skipped`:''].filter(Boolean).join(' · ')+'.','muted'));
    out.append(section(r.dry_run?'Will change':'Changed',r.changed,mini(['Product','Variant','SKU','Now','After','Held by unpaid orders'],r.changes.map(c=>[c.product_title,c.variant,c.sku,c.before,c.after,c.held||''])),r.dry_run));

@@ -29,6 +29,10 @@ Admin → Products → **Inventory** → card **Sync from POS** (editors and own
 - Calls `GET {MPOS_API_URL}/api/stock-warehouse?inStockOnly=true&isActive=true&pageSize=500&page=N`
   with header `X-API-Key: $MPOS_API_KEY` until all `totalCount` rows are read. If the pages do not add up
   to `totalCount`, or any page fails, nothing is changed.
+- If a reply is not valid JSON (for example cut off part-way), everything is read again with
+  `pageSize=100`. If that also fails, the error names the HTTP status, content type, length and the start
+  of the reply (never the key), and the same is written to the Vercel function log (`pos-sync: mPOS reply
+  is not JSON`).
 - Rows are per item **per warehouse**. `qtyAvailable` is summed per `stockCode` over all warehouses
   (or only `MPOS_WAREHOUSE_ID`), rounded down, never below 0.
 - `stockCode` = website variant SKU, ignoring case and repeated spaces. If that finds nothing, spaces,
