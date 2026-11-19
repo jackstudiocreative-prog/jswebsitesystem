@@ -1,8 +1,9 @@
+import {rootCertificates} from 'node:tls';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { configuration,runtime } from '../src/runtime.mjs';
 import api from '../api/index.mjs';
-const env={APP_ENV:'staging',VERCEL_ENV:'preview',DATABASE_URL:'postgres://user:placeholder@db.example/db?sslmode=verify-full',AUTH_ISSUER:'https://identity.example/auth/v1',AUTH_AUDIENCE:'authenticated',AUTH_JWKS_URL:'https://identity.example/auth/v1/.well-known/jwks.json'};
+const env={DATABASE_CA_CERT:rootCertificates[0],APP_ENV:'staging',VERCEL_ENV:'preview',DATABASE_URL:'postgres://user:placeholder@db.example/db?sslmode=verify-full',AUTH_ISSUER:'https://identity.example/auth/v1',AUTH_AUDIENCE:'authenticated',AUTH_JWKS_URL:'https://identity.example/auth/v1/.well-known/jwks.json'};
 test('serverless requires staging, verified TLS and explicit identity',()=>{
  assert.equal(configuration(env).max,2);
  for(const change of [{APP_ENV:'production'},{VERCEL_ENV:'production'},{DATABASE_URL:''},{DATABASE_URL:'postgres://db.example/db?sslmode=disable'},{AUTH_ISSUER:''}])assert.throws(()=>configuration({...env,...change}));

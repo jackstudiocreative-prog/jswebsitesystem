@@ -1,0 +1,65 @@
+// Test-only server for the Playwright suite. Refuses to run unless E2E_HARNESS=1 and binds to
+// 127.0.0.1. Serves the real build (public/) with the real vercel.json headers and rewrites, backed
+// by the real API handler on an in-memory PostgreSQL (PGlite), a fixed test identity and the mock
+// payment gateway. It is not referenced by the build or by Vercel.
+import {createServer} from 'node:http';
+import {readFile} from 'node:fs/promises';
+import {shopifyKey} from '../src/shopify-import.mjs';
+import {fileURLToPath} from 'node:url';
+import {build} from 'esbuild';
+import {PGlite} from '@electric-sql/pglite';
+import {migrate} from '../src/migrate.mjs';
+import {handler} from '../src/handler.mjs';
+import {testGateway} from '../src/payments.mjs';
+// `--demo` (npm run demo) also seeds sample products and pages for hands-on testing.
+const demo=process.argv.includes('--demo');
+if(process.env.E2E_HARNESS!=='1'&&!demo)throw Error('Test harness only (set E2E_HARNESS=1 or run npm run demo)');
+const root=new URL('../',import.meta.url),port=Number(process.env.E2E_PORT??4317);
+const config=JSON.parse(await readFile(new URL('vercel.json',root),'utf8'));
+// vercel.json patterns -> RegExp (":name*" any, ":name" one segment; groups are already regex).
+const pattern=src=>new RegExp('^'+src.replace(/:[a-z]+\*/g,'.*').replace(/:[a-z]+/g,'[^/]+')+'$');
+const redirects=(config.redirects??[]).map(r=>[pattern(r.source),r.destination,r.permanent?308:307]);
+const rewrites=config.rewrites.map(r=>[pattern(r.source),r.destination]),headers=config.headers.map(h=>[pattern(h.source),h.headers]);
+const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
+await migrate(sql);
+await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");
+for(const label of ['card-holder-brown.jpg','card-holder-black.jpg','weekender.jpg'])await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,format,label,width,height) VALUES ($1,'image/jpeg',200000,'ready','editor','jpg',$2,1600,1600)",['e2e/'+label,label]);
+// Shopify images the page templates use, with their real sizes, so layouts match the Shopify site.
+for(const [name,[w,h]] of Object.entries(JSON.parse(await readFile(new URL('e2e/shopify-image-sizes.json',root),'utf8'))))await db.query("INSERT INTO media(object_key,mime,bytes,state,created_by,format,label,width,height) VALUES ($1,'image/png',200000,'ready','editor','png',$2,$3,$4)",[shopifyKey('files/'+name),name,w,h]);
+await db.query('SET ROLE jackstudio_api');
+const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.repeat(10),actionUrl:`http://127.0.0.1:${port}/pay/mock`,baseUrl:'https://e2e.test'});
+// Stand-in for mPOS GET /api/stock-warehouse (two warehouses; one code written with a dash).
+const posRow=(id,stockCode,warehouseId,qtyAvailable)=>({id,stockCode,warehouseId,warehouseCode:'W'+warehouseId,warehouseName:warehouseId===1?'HQ':'Mid Valley',description:'POS '+stockCode,colour:'Brown',qtyAvailable,isActive:true});
+const posRows=[posRow(1,'E2E POS 1',1,4),posRow(2,'E2E POS 1',2,3),posRow(3,'E2E POS 3',1,6),posRow(4,'E2E-POS-2',1,5),posRow(5,'POS ONLY 9',2,8)];
+const pos={fetchStock:async()=>({rows:posRows,pages:1,total:posRows.length})};
+const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,pos,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id,publicDerivative:(m,w)=>'/theme-assets/virtual-showroom-cover.jpg?id='+m.id+'&w='+w}});
+const adminJs=(await build({entryPoints:[fileURLToPath(new URL('e2e/admin-entry.mjs',root))],bundle:true,format:'esm',write:false})).outputFiles[0].text;
+const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.woff2':'font/woff2','.jpg':'image/jpeg','.webp':'image/webp'};
+createServer(async(req,res)=>{
+ const path=new URL(req.url,'http://x').pathname;
+ for(const [re,list] of headers)if(re.test(path))for(const h of list)res.setHeader(h.key,h.value);
+ for(const [re,dest,code] of redirects)if(re.test(path)){res.statusCode=code;res.setHeader('Location',dest);return res.end();}
+ let target=path;for(const [re,dest] of rewrites)if(re.test(path)){target=dest;break;}
+ if(target==='/api/index')return api(req,res);
+ if(target==='/admin.js'){res.setHeader('Content-Type','text/javascript');return res.end(adminJs);}
+ const name=target.endsWith('/')?target+'index.html':target; // "/" is the storefront home
+ try{const file=await readFile(new URL('public'+name,root));res.setHeader('Content-Type',types[name.slice(name.lastIndexOf('.'))]??'application/octet-stream');res.end(file);}
+ catch{res.statusCode=404;if(!/\.[a-z0-9]+$/i.test(name)){try{res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(await readFile(new URL('public/404.html',root)));}catch{}}res.end('Not found');}
+}).listen(port,'127.0.0.1',async()=>{
+ if(!demo)return console.log('e2e harness on',port);
+ const call=async(path,body,method='POST',role='editor')=>{const r=await fetch(`http://127.0.0.1:${port}/api/v3/`+path,{method,headers:{Authorization:'Bearer '+role,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const j=await r.json();if(!r.ok)throw Error(path+': '+j.error);return j;};
+ const wallets=await call('collections',{title:'Wallets & Small Leather',status:'active',position:1}),travel=await call('collections',{title:'Travel',status:'active',position:2});
+ await call('products',{title:'Card Holder',status:'active',description:'<p>Full-grain leather card holder with four slots.</p><p>Hand-finished edges.<br>Fits 6 cards.</p><h5>Engraving</h5><ul><li>Capital letters and numbers</li><li>Up to 5 characters</li></ul>',personalization:{enabled:true,required:false,label:'Engraving',max_length:5,charset:'upper_alnum',help:'Free engraving, ready in 2 days.'},collection_ids:[String(wallets.id)],option_names:['Color'],media:[{media_id:'1',alt:'Card holder in brown'},{media_id:'2',alt:'Card holder in black'}],variants:[{option_values:['Brown'],sku:'JS-CH-BRN',price_minor:12900,inventory:12,media_id:'1'},{option_values:['Black'],sku:'JS-CH-BLK',price_minor:12900,inventory:3,media_id:'2'},{option_values:['Tan'],sku:'JS-CH-TAN',price_minor:13900,inventory:0}]});
+ await call('products',{title:'Slim Wallet',status:'active',collection_ids:[String(wallets.id)],sku:'JS-SW-01',price_minor:3900,inventory:20});
+ await call('products',{title:'Weekender Duffel',status:'active',collection_ids:[String(travel.id)],sku:'JS-WK-01',price_minor:69900,inventory:5,shipping_profile:'luggage',weight_grams:2500,media:[{media_id:'3',alt:'Weekender duffel'}]});
+ await call('products',{title:'Everyday Tote (draft)',status:'draft',collection_ids:[String(wallets.id)],sku:'JS-TT-01',price_minor:45900,inventory:4});
+ const {TEMPLATES}=await import('../shared/page-schema.mjs');
+ const home=await call('pages',TEMPLATES.home.build());await call(`pages/${home.id}/publish`,{revision:home.revision});
+ await call('pages',TEMPLATES['brand-story'].build());
+ // Online Store: the Jack Studio 2026 theme, live, with its Best Seller tabs pointed at the sample collections.
+ const theme=await call('themes',{preset:'jack-studio-2026'}),content=(await call('themes/'+theme.id,undefined,'GET')).content;
+ const tabs=content.sections.find(x=>x.type==='product_tabs').settings.tabs;tabs[0].collection_id=String(wallets.id);tabs[3].collection_id=String(travel.id);
+ const saved=await call('themes/'+theme.id,{revision:theme.revision,content},'PATCH');await call(`themes/${theme.id}/publish`,{revision:saved.revision});
+ const b=`http://127.0.0.1:${port}`;
+ console.log(`\nJack Studio V3 — local simulation (in-memory data, resets when stopped; mock eGHL, no real money)\n\n  Staff workspace (editor): ${b}/admin\n  Staff workspace (viewer): ${b}/admin?role=viewer\n  Storefront (live theme):  ${b}/\n  Website home:             ${b}/pages/home\n  Product page:             ${b}/products/card-holder\n  Bag:                      ${b}/cart\n\nPress Ctrl+C to stop.\n`);
+});

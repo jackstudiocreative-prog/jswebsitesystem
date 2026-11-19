@@ -1,0 +1,378 @@
+import {createHash,randomUUID} from 'node:crypto';
+import {HttpError} from './auth.mjs';
+import {adjustStock,syncSummary} from './inventory.mjs';
+import {amount} from './payments.mjs';
+import {queueEmail} from './email.mjs';
+import {publicImage} from './media-urls.mjs';
+import {hasColumn} from './schema.mjs';
+import * as discounts from './discounts.mjs';
+import {normalizeEngraving,engravingError,offersEngraving} from '../shared/personalization.mjs';
+import {MAX_PENDING_PER_EMAIL} from './protect.mjs';
+// Orders and payments. Everything a customer sends is re-priced on the server. Stock is reserved at
+// checkout through the ledger ('sale') and released if the order expires or is cancelled
+// ('sale_released'). Lock order everywhere: order row, then product rows by id, then variant rows.
+export const STATES=['Johor','Kedah','Kelantan','Kuala Lumpur','Labuan','Melaka','Negeri Sembilan','Pahang','Penang','Perak','Perlis','Putrajaya','Sabah','Sarawak','Selangor','Terengganu'];
+export const RESERVE_MINUTES=30;
+// Bank-pending payments get at most 24 hours from creation, even after duplicate callbacks.
+export const EXPIRABLE="o.status='pending_payment' AND o.expires_at<=now() AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.order_id=o.id AND p.status='pending' AND p.created_at>now()-interval '24 hours')";
+const bad=message=>{throw new HttpError(400,message);};
+const key=v=>{const s=String(v);if(!/^[1-9]\d{0,17}$/.test(s))bad('Invalid ID');return s;};
+const hash=t=>createHash('sha256').update(t).digest('hex');
+const str=(v,label,min,max)=>{const s=String(v??'').trim();if(s.length<min||s.length>max)bad(`${label} must be ${min}–${max} characters`);return s;};
+const variantTitle=(names,values)=>values?.length?values.join(' / '):'';
+async function lockProducts(db,ids){if(ids.length)await db.query('SELECT id FROM products WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE',[[...new Set(ids.map(String))]]);}
+const SELLABLE=`p.status='active' AND v.active AND EXISTS(SELECT 1 FROM product_collections pc JOIN collections c ON c.id=pc.collection_id WHERE pc.product_id=p.id AND c.status='active')`;
+
+// Shopify rule copied: per shipping profile in the cart, the cheapest rate whose conditions match the
+// items of that profile; the order pays the sum across profiles. A profile with no matching rate
+// (e.g. luggage without a weight) cannot be shipped.
+export async function quoteShipping(db,groups){
+ const rates=(await db.query('SELECT * FROM shipping_rates WHERE active ORDER BY price_minor,id')).rows;
+ let total=0;const names=[];
+ for(const [profile,g] of Object.entries(groups)){
+  const rate=rates.find(r=>r.profile===profile&&(r.min_subtotal_minor==null||g.subtotal>=r.min_subtotal_minor)&&(r.min_weight_grams==null||g.weight>=r.min_weight_grams)&&(r.max_weight_grams==null||g.weight<=r.max_weight_grams));
+  if(!rate)throw new HttpError(409,profile==='luggage'?'Luggage shipping is not available for this order. Please chat with us.':'Shipping is not available for this order.');
+  total+=rate.price_minor;names.push(rate.name);
+ }
+ return {shipping_minor:total,names:[...new Set(names)]};
+}
+function linesInput(value){
+ if(!Array.isArray(value)||!value.length||value.length>50)bad('Your bag needs 1–50 items');
+ return value.map(l=>{if(!l||typeof l!=='object')bad('Invalid item');const q=l.quantity;if(!Number.isInteger(q)||q<1||q>20)bad('Quantity must be 1–20');
+  if(l.engraving!=null&&(typeof l.engraving!=='string'||l.engraving.length>80))bad('Invalid engraving');
+  return {variant_id:key(l.variant_id),quantity:q,engraving:l.engraving??''};});
+}
+// Prices the bag from the database. `strict` (checkout) refuses any problem; the bag preview reports it per line.
+// A line is one variant with one engraving: the same variant with different engravings stays separate,
+// identical lines are merged. Stock is checked against the total of all lines of a variant.
+async function price(db,lines,{strict=true}={}){
+ const rows=(await db.query(`SELECT v.*,p.title,p.option_names,p.shipping_profile,p.weight_grams,p.handle,to_jsonb(p)->'personalization' AS personalization,(${SELLABLE}) AS sellable FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.id = ANY($1::bigint[])`,[[...new Set(lines.map(l=>l.variant_id))]])).rows;
+ const merged=[];
+ for(const l of lines){
+  const v=rows.find(r=>String(r.id)===l.variant_id);
+  const engraving=v?normalizeEngraving(v.personalization,l.engraving):String(l.engraving??'').trim();
+  const same=merged.find(m=>m.variant_id===l.variant_id&&m.engraving===engraving);
+  if(same){same.quantity+=l.quantity;if(same.quantity>20)bad('Quantity must be 1–20');}else merged.push({...l,engraving});
+ }
+ const wanted={};for(const l of merged)wanted[l.variant_id]=(wanted[l.variant_id]??0)+l.quantity;
+ const out=[],groups={};let subtotal=0;
+ for(const l of merged){
+  const v=rows.find(r=>String(r.id)===l.variant_id);
+  if(!v||!v.sellable){if(strict)throw new HttpError(409,'An item in your bag is no longer available.');out.push({variant_id:l.variant_id,quantity:l.quantity,engraving:l.engraving||null,available:false});continue;}
+  const problem=engravingError(v.personalization,v.id,l.engraving);
+  if(problem&&strict)bad(`${v.title}: ${problem}`);
+  const line={variant_id:l.variant_id,product_id:String(v.product_id),media_id:v.media_id==null?null:String(v.media_id),title:v.title,handle:v.handle,variant_title:variantTitle(v.option_names,v.option_values),sku:v.sku,
+   engraving:l.engraving||null,engraving_label:offersEngraving(v.personalization,v.id)?v.personalization.label:null,engraving_error:problem,
+   unit_price_minor:v.price_minor,quantity:l.quantity,line_total_minor:v.price_minor*l.quantity,available:!problem&&v.inventory>=wanted[l.variant_id],in_stock:v.inventory};
+  out.push(line);subtotal+=line.line_total_minor;
+  const g=groups[v.shipping_profile]??={subtotal:0,weight:0};g.subtotal+=line.line_total_minor;g.weight+=v.weight_grams*l.quantity;
+ }
+ return {lines:out,subtotal,groups};
+}
+// Bag thumbnails: the variant's own image, else the product's featured or first gallery image.
+async function lineImages(db,lines){
+ const out=new Map();if(!lines.length)return out;
+ const rows=(await db.query(`SELECT p.id,coalesce(p.featured_media_id,(SELECT pm.media_id FROM product_media pm WHERE pm.product_id=p.id ORDER BY pm.position LIMIT 1)) AS media_id FROM products p WHERE p.id = ANY($1::bigint[])`,[[...new Set(lines.map(l=>l.product_id))]])).rows;
+ const productMedia=new Map(rows.map(r=>[String(r.id),r.media_id==null?null:String(r.media_id)]));
+ const ids=[...new Set(lines.map(l=>l.media_id??productMedia.get(l.product_id)).filter(Boolean))];
+ const media=ids.length?new Map((await db.query("SELECT id,width,height,label FROM media WHERE state='ready' AND id = ANY($1::bigint[])",[ids])).rows.map(m=>[String(m.id),m])):new Map();
+ for(const l of lines){const m=media.get(l.media_id??'')??media.get(productMedia.get(l.product_id)??'');if(m)out.set(l.variant_id,publicImage(m,l.title));}
+ return out;
+}
+export async function quoteBag(db,input){
+ const lines=linesInput(input?.lines);const priced=await price(db,lines,{strict:false});
+ let shipping=null,shippingError=null;
+ if(priced.lines.some(l=>l.available===false&&!l.title))shippingError='Remove unavailable items to continue.';
+ else try{shipping=await quoteShipping(db,priced.groups);}catch(e){if(!e.status)throw e;shippingError=e.message;}
+ // Discounts: the code (if any) and automatic discounts, computed here; the browser sends only the code.
+ const code=typeof input?.discount_code==='string'?input.discount_code.slice(0,40):'';
+ const d=await discounts.evaluate(db,{lines:priced.lines,subtotal:priced.subtotal,shipping_minor:shipping?.shipping_minor??0,code});
+ const images=await lineImages(db,priced.lines.filter(l=>l.title));
+ return {lines:priced.lines.map(({in_stock,media_id,...l})=>({...l,image:l.title?images.get(l.variant_id)??null:null,low:in_stock!==undefined&&in_stock<=5})),subtotal_minor:priced.subtotal,shipping_minor:shipping?.shipping_minor??null,discounts:[d.product,d.shipping].filter(Boolean).map(({id,...x})=>x),discount_minor:d.discount_minor,discount_code:d.code_error?null:discounts.normalizeCode(code)||null,discount_error:d.code_error,total_minor:shipping?priced.subtotal+shipping.shipping_minor-d.discount_minor:null,shipping_names:shipping?.names??[],shipping_error:shippingError,currency:'MYR'};
+}
+function customerInput(c){
+ if(!c||typeof c!=='object')bad('Customer details required');
+ const email=str(c.email,'Email',3,254).toLowerCase();if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email))bad('Enter a valid email');
+ const phone=str(c.phone,'Phone',6,30);if(!/^\+?[0-9 ()-]{6,30}$/.test(phone))bad('Enter a valid phone number');
+ const postcode=String(c.postcode??'').trim();if(!/^\d{5}$/.test(postcode))bad('Postcode must be 5 digits');
+ if(!STATES.includes(c.state))bad('Choose a state');
+ return {customer_name:str(c.name,'Name',1,120),email,phone,address_line1:str(c.address_line1,'Address',1,200),address_line2:String(c.address_line2??'').trim().slice(0,200),city:str(c.city,'City',1,100),postcode,state:c.state,note:String(c.note??'').trim().slice(0,500)};
+}
+function token(value){if(typeof value!=='string'||!/^[A-Za-z0-9_-]{32,128}$/.test(value))bad('Invalid order access token');return value;}
+async function newPayment(db,order,payments){
+ const n=Number((await db.query('SELECT count(*) AS n FROM payments WHERE order_id=$1',[order.id])).rows[0].n)+1;
+ if(n>10)throw new HttpError(429,'Too many payment attempts for this order. Please contact us.');
+ const payment=(await db.query('INSERT INTO payments(order_id,provider,payment_ref,amount_minor) VALUES ($1,$2,$3,$4) RETURNING *',[order.id,payments.provider,`${order.number}P${n}`,order.total_minor])).rows[0];
+ return payment;
+}
+const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,discount_minor:o.discount_minor??0,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,tracking_carrier:o.tracking_carrier??'',tracking_url:o.tracking_url??'',expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,personalization:l.personalization??null,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
+// Releases stock for unpaid orders past their reservation. Orders with a recent pending (e.g. FPX
+// bank-pending) payment are kept for up to 24 hours while the bank confirms.
+export async function sweepExpired(db,limit=20){
+ const due=(await db.query(`SELECT id FROM orders o WHERE ${EXPIRABLE} ORDER BY expires_at,id LIMIT $1 FOR UPDATE SKIP LOCKED`,[limit])).rows;
+ // Lock every product in global order before releasing a multi-order batch. Otherwise two
+ // overlapping workers can each hold one product and wait for the other's next product.
+ if(due.length){const products=(await db.query('SELECT DISTINCT product_id FROM order_lines WHERE order_id = ANY($1::bigint[])',[due.map(o=>o.id)])).rows;await lockProducts(db,products.map(p=>p.product_id));}
+ for(const {id} of due)await release(db,id,'expired');
+ return due.length;
+}
+async function release(db,orderId,status,actor=null){
+ const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[orderId])).rows;
+ await lockProducts(db,lines.map(l=>l.product_id));
+ const order=(await db.query("UPDATE orders SET status=$2,cancelled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *",[orderId,status])).rows[0];
+ for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:l.quantity,reason:'sale_released',note:`${order.number} ${status}`,actor,orderId});
+ for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
+ await discounts.release(db,orderId);
+ if(status==='expired')await orderAudit(db,null,'expired',orderId,'Payment time ended; stock released');
+ return order;
+}
+export async function checkout(db,input,payments,custIp){
+ if(!input||typeof input!=='object')bad('Object required');
+ if(typeof input.idempotency_key!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(input.idempotency_key))bad('Invalid checkout key');
+ const access=token(input.access_token);
+ await db.query('SELECT pg_advisory_xact_lock(7348302,hashtext($1))',[input.idempotency_key.toLowerCase()]);
+ const existing=(await db.query('SELECT * FROM orders WHERE idempotency_key=$1 FOR UPDATE',[input.idempotency_key])).rows[0];
+ if(existing){
+  // Same checkout submitted twice (double click, retry after a network error): never a second order.
+  if(existing.access_token_hash!==hash(access))throw new HttpError(409,'This checkout was already submitted.');
+  const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id',[existing.id])).rows;
+  const last=(await db.query('SELECT * FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1',[existing.id])).rows[0];
+  return {order:publicOrder(existing,lines,last),payment:existing.status==='pending_payment'&&last?.status==='initiated'?payments.request(last,existing,custIp):null};
+ }
+ // Bots fill every field; people never see this one.
+ if(input.customer?.website)bad('We could not process this checkout.');
+ const lines=linesInput(input.lines),customer=customerInput(input.customer);
+ await db.query('SELECT pg_advisory_xact_lock(7348303,hashtext($1))',[customer.email]);
+ // Held stock is limited per customer, so nobody can tie up the catalogue with unpaid orders.
+ const open=Number((await db.query("SELECT count(*) AS n FROM orders WHERE lower(email)=$1 AND status='pending_payment'",[customer.email])).rows[0].n);
+ if(open>=MAX_PENDING_PER_EMAIL)throw new HttpError(429,'You have unpaid orders waiting. Complete one of them or try again in 30 minutes.');
+ // Resolve owners, lock products, then re-read sellability, prices and shipping configuration.
+ // A staff save that wins the lock must be reflected in the order being created.
+ const owners=(await db.query('SELECT product_id FROM product_variants WHERE id = ANY($1::bigint[])',[lines.map(l=>l.variant_id)])).rows;
+ await lockProducts(db,owners.map(v=>v.product_id));
+ const priced=await price(db,lines);
+ // Engraved lines need migration 011; never take an order that would lose the engraving.
+ const engravingColumn=await hasColumn(db,'order_lines','personalization');
+ if(!engravingColumn&&priced.lines.some(l=>l.engraving))throw new HttpError(503,'Engraving cannot be ordered online yet. Remove the engraving or contact us.');
+ const shipping=await quoteShipping(db,priced.groups);
+ const code=typeof input.discount_code==='string'?input.discount_code.slice(0,40):'';
+ const disc=await discounts.evaluate(db,{lines:priced.lines,subtotal:priced.subtotal,shipping_minor:shipping.shipping_minor,code,email:customer.email});
+ if(code&&disc.code_error)bad(disc.code_error);
+ const discountColumn=await discounts.available(db);
+ const number='JSW'+(await db.query("SELECT nextval('order_number_seq') AS n")).rows[0].n;
+ const discount=discountColumn?disc.discount_minor:0;
+ const order=(await db.query(`INSERT INTO orders(number,idempotency_key,access_token_hash,customer_name,email,phone,address_line1,address_line2,city,postcode,state,note,subtotal_minor,shipping_minor,total_minor,shipping_names,expires_at${discountColumn?',discount_minor':''})
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()+make_interval(mins=>$17)${discountColumn?',$18':''}) RETURNING *`,[number,input.idempotency_key,hash(access),customer.customer_name,customer.email,customer.phone,customer.address_line1,customer.address_line2,customer.city,customer.postcode,customer.state,customer.note,priced.subtotal,shipping.shipping_minor,priced.subtotal+shipping.shipping_minor-discount,shipping.names.join(' · '),RESERVE_MINUTES,...(discountColumn?[discount]:[])])).rows[0];
+ if(discountColumn)await discounts.claim(db,order.id,disc,customer.email);
+ await lockProducts(db,priced.lines.map(l=>l.product_id));
+ for(const l of priced.lines){
+  if(engravingColumn)await db.query('INSERT INTO order_lines(order_id,product_id,variant_id,title,variant_title,sku,unit_price_minor,quantity,line_total_minor,personalization) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[order.id,l.product_id,l.variant_id,l.title,l.variant_title,l.sku,l.unit_price_minor,l.quantity,l.line_total_minor,l.engraving]);
+  else await db.query('INSERT INTO order_lines(order_id,product_id,variant_id,title,variant_title,sku,unit_price_minor,quantity,line_total_minor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',[order.id,l.product_id,l.variant_id,l.title,l.variant_title,l.sku,l.unit_price_minor,l.quantity,l.line_total_minor]);
+  try{await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:number,orderId:order.id});}
+  catch(e){if(e.status===409){const left=(await db.query('SELECT inventory FROM product_variants WHERE id=$1',[l.variant_id])).rows[0].inventory;throw new HttpError(409,left?`Only ${left} left of ${l.title}${l.variant_title?' · '+l.variant_title:''}.`:`${l.title}${l.variant_title?' · '+l.variant_title:''} just sold out.`);}throw e;}
+ }
+ for(const p of new Set(priced.lines.map(l=>l.product_id)))await syncSummary(db,p);
+ const payment=await newPayment(db,order,payments);
+ const saved=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id',[order.id])).rows;
+ return {order:publicOrder(order,saved,payment),payment:payments.request(payment,order,custIp)};
+}
+async function orderByToken(db,number,access,lock=false){
+ if(!/^JSW\d{1,12}$/.test(number))throw new HttpError(404,'Order not found');
+ const o=(await db.query(`SELECT * FROM orders WHERE number=$1${lock?' FOR UPDATE':''}`,[number])).rows[0];
+ if(!o||o.access_token_hash!==hash(token(access)))throw new HttpError(404,'Order not found');
+ return o;
+}
+export async function orderStatus(db,number,input){
+ const o=await orderByToken(db,number,input?.access_token);
+ const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id',[o.id])).rows,last=(await db.query('SELECT * FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1',[o.id])).rows[0];
+ return {order:publicOrder(o,lines,last)};
+}
+export async function retryPayment(db,number,input,payments,custIp){
+ const o=await orderByToken(db,number,input?.access_token,true);
+ if(o.status!=='pending_payment'||new Date(o.expires_at)<new Date())throw new HttpError(409,'This order can no longer be paid. Please place a new order.');
+ const busy=(await db.query("SELECT 1 FROM payments WHERE order_id=$1 AND status IN ('succeeded','pending')",[o.id])).rows.length;
+ if(busy)throw new HttpError(409,'A payment for this order is already being processed.');
+ const payment=await newPayment(db,o,payments);
+ return {payment:payments.request(payment,o,custIp)};
+}
+// Applies one gateway message. Safe to receive any number of times, in any order.
+// Explicit protocol evidence only. Unknown gateway fields can contain PANs, tokens or customer PII.
+const EVENT_FIELDS=new Set(['TransactionType','PymtMethod','ServiceID','PaymentID','OrderNumber','Amount','CurrencyCode','TxnID','TxnStatus']);
+const keep=f=>Object.fromEntries(Object.entries(f).filter(([k])=>EVENT_FIELDS.has(k)).map(([k,v])=>[k,String(v).slice(0,300)]));
+export async function gatewayMessage(db,source,fields,payments){
+ const msg=payments.verify(fields);
+ const event=async(paymentId,outcome)=>db.query('INSERT INTO payment_events(payment_id,source,verified,txn_status,outcome,payload) VALUES ($1,$2,$3,$4,$5,$6)',[paymentId,source,!!msg,msg?.txnStatus??null,outcome,JSON.stringify(keep(fields??{}))]);
+ if(!msg){await event(null,'rejected_signature');return {ok:false};}
+ const found=(await db.query('SELECT id,order_id FROM payments WHERE payment_ref=$1 AND provider=$2',[msg.paymentRef,payments.provider])).rows[0];
+ if(!found){await event(null,'unknown_payment');return {ok:false};}
+ const order=(await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[found.order_id])).rows[0];
+ const payment=(await db.query('SELECT * FROM payments WHERE id=$1 FOR UPDATE',[found.id])).rows[0];
+ const flag=note=>db.query("UPDATE orders SET needs_attention=true,attention_note=trim(attention_note||' '||$2),updated_at=now() WHERE id=$1",[order.id,note]);
+ if(msg.orderNumber&&msg.orderNumber!==order.number){await event(payment.id,'rejected_order');return {ok:false};}
+ if(msg.amount!==amount(payment.amount_minor)||msg.currency!=='MYR'){await event(payment.id,'rejected_amount');await flag(`Gateway reported ${msg.currency} ${msg.amount} for ${payment.payment_ref}; expected MYR ${amount(payment.amount_minor)}.`);return {ok:false,number:order.number};}
+ if(payment.status==='succeeded'){await event(payment.id,'duplicate');return {ok:true,number:order.number};}
+ if(msg.pymtMethod&&await hasColumn(db,'payments','pymt_method'))await db.query('UPDATE payments SET pymt_method=$2 WHERE id=$1',[payment.id,msg.pymtMethod]);
+ if(msg.txnStatus==='0'){
+  await db.query("UPDATE payments SET status='succeeded',provider_txn_id=$2,auth_code=$3,updated_at=now() WHERE id=$1",[payment.id,msg.txnId,msg.authCode]);
+  if(order.status==='paid'){await event(payment.id,'duplicate_payment');await flag(`Second successful payment ${payment.payment_ref} received; refund one payment.`);return {ok:true,number:order.number};}
+  if(order.status!=='pending_payment'){
+   // Paid after the reservation was released: take the stock again if it is still there.
+   const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[order.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
+   const inventory=(await db.query('SELECT id,inventory FROM product_variants WHERE id = ANY($1::bigint[]) ORDER BY id FOR UPDATE',[lines.map(l=>l.variant_id)])).rows;
+   const short=lines.filter(l=>inventory.find(v=>String(v.id)===String(l.variant_id)).inventory<l.quantity).map(l=>l.title);
+   if(!short.length)for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:`${order.number} paid late`,orderId:order.id});
+   for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
+   if(short.length)await flag(`Paid after the order ${order.status}; not enough stock for ${short.join(', ')}. Restock or refund.`);
+   // The customer paid the discounted price, so the discount counts as used again (capped at its limit).
+   await discounts.reclaim(db,order.id);
+  }
+  await db.query("UPDATE orders SET status='paid',paid_at=now(),cancelled_at=NULL,revision=revision+1,updated_at=now() WHERE id=$1",[order.id]);
+  await queueEmail(db,order.id,'order_paid');
+  await orderAudit(db,null,'paid',order.id,`${payment.payment_ref} confirmed by eGHL (${source})`);
+  await event(payment.id,'paid');return {ok:true,number:order.number};
+ }
+ const next=msg.txnStatus==='2'?'pending':'failed';
+ await db.query('UPDATE payments SET status=$2,provider_txn_id=coalesce($3,provider_txn_id),updated_at=now() WHERE id=$1',[payment.id,next,msg.txnId]);
+ await event(payment.id,next);return {ok:true,number:order.number};
+}
+export async function mockComplete(db,input,payments){
+ if(payments.provider!=='mock')throw new HttpError(404,'Not found');
+ const o=await orderByToken(db,String(input?.number??''),input?.access_token);
+ if(!['approve','decline','pending'].includes(input?.outcome))bad('Invalid outcome');
+ const payment=(await db.query("SELECT * FROM payments WHERE order_id=$1 ORDER BY id DESC LIMIT 1",[o.id])).rows[0];if(!payment)throw new HttpError(404,'Payment not found');
+ return gatewayMessage(db,'callback',payments.simulate(payment,o,input.outcome),payments);
+}
+
+// Staff (admin/editor write, viewer read).
+export async function listOrders(db,params){
+ const args=[],where=[];const add=(sql,v)=>{args.push(v);where.push(sql.replaceAll('?','$'+args.length));};
+ const q=(params.get('q')??'').trim();if(q.length>150)bad('Search too long');if(q)add('(number ILIKE ? OR email ILIKE ? OR customer_name ILIKE ? OR phone ILIKE ?)','%'+q+'%');
+ const st=params.get('status');if(st){if(!['pending_payment','paid','cancelled','expired','unfulfilled','attention'].includes(st))bad('Invalid filter');if(st==='unfulfilled')where.push("status='paid' AND fulfillment_status='unfulfilled'");else if(st==='attention')where.push('needs_attention');else add('status=?',st);}
+ const limit=Number(params.get('limit')??25),offset=Number(params.get('offset')??0);if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0)bad('Invalid paging');
+ const filter=where.length?' WHERE '+where.join(' AND '):'';
+ const total=Number((await db.query('SELECT count(*) AS n FROM orders'+filter,args)).rows[0].n);
+ const rows=(await db.query(`SELECT id,number,status,fulfillment_status,needs_attention,customer_name,email,total_minor,refunded_minor,created_at,paid_at,(SELECT coalesce(sum(quantity),0)::int FROM order_lines l WHERE l.order_id=orders.id) AS items FROM orders${filter} ORDER BY id DESC LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,offset])).rows;
+ return {items:rows.map(r=>({...r,id:String(r.id)})),total,limit,offset};
+}
+export async function orderDetail(db,id){
+ const o=(await db.query('SELECT * FROM orders WHERE id=$1',[key(id)])).rows[0];if(!o)throw new HttpError(404,'Order not found');
+ const {access_token_hash,idempotency_key,...order}=o;
+ const q=(sql)=>db.query(sql,[o.id]).then(r=>r.rows);
+ return {...order,id:String(o.id),lines:await q('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id'),payments:await q('SELECT id,provider,payment_ref,amount_minor,status,provider_txn_id,auth_code,created_at,updated_at FROM payments WHERE order_id=$1 ORDER BY id'),
+  events:await q('SELECT e.source,e.verified,e.txn_status,e.outcome,e.received_at,p.payment_ref FROM payment_events e JOIN payments p ON p.id=e.payment_id WHERE p.order_id=$1 ORDER BY e.id'),
+  refunds:await q(`SELECT r.amount_minor,r.reference,r.note,r.restocked,r.created_at,r.actor,s.role AS actor_role${await hasColumn(db,'refunds','method')?',r.method':",'recorded' AS method"} FROM refunds r LEFT JOIN staff s ON s.subject=r.actor WHERE r.order_id=$1 ORDER BY r.id`),
+  gateway_refunds:await hasColumn(db,'refunds','method')?await q('SELECT id::text,amount_minor,status,restock,note,gateway_txn_id,message,created_at,updated_at FROM gateway_refunds WHERE order_id=$1 ORDER BY id'):[],
+  activity:await hasColumn(db,'order_activity','action')?await q('SELECT a.action,a.detail,a.created_at,a.actor,s.role AS actor_role FROM order_activity a LEFT JOIN staff s ON s.subject=a.actor WHERE a.order_id=$1 ORDER BY a.id'):[],
+  aftersales:await hasColumn(db,'refunds','method'),
+  discounts:await discounts.orderDiscounts(db,o.id),
+  stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id'),
+  emails:await q('SELECT kind,recipient,subject,status,created_at,sent_at FROM email_outbox WHERE order_id=$1 ORDER BY id')};
+}
+async function lockedOrder(db,id,revision){
+ const o=(await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[key(id)])).rows[0];if(!o)throw new HttpError(404,'Order not found');
+ if(revision!==o.revision)throw new HttpError(409,'Order changed. Reload before continuing.');return o;
+}
+// Returns to stock the units this order still holds (net of reservation, release and earlier returns),
+// so calling it twice, or after a late payment with no stock, never adds stock that was not taken.
+export async function restockOrder(db,o,actor,why){
+ const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
+ let units=0;
+ for(const l of lines){
+  const net=Number((await db.query("SELECT coalesce(sum(delta),0) AS n FROM inventory_adjustments WHERE order_id=$1 AND variant_id=$2 AND reason IN ('sale','sale_released','returned')",[o.id,l.variant_id])).rows[0].n);
+  if(net<0){await adjustStock(db,{variantId:l.variant_id,delta:-net,reason:'returned',note:`${o.number} ${why}`,actor,orderId:o.id});units-=net;}
+ }
+ for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
+ return units;
+}
+// Gateway refunds sent but not yet confirmed (or unclear) hold back that amount from further refunds.
+export async function refundInFlight(db,orderId){
+ if(!await hasColumn(db,'refunds','method'))return 0;
+ return Number((await db.query("SELECT coalesce(sum(amount_minor),0) AS n FROM gateway_refunds WHERE order_id=$1 AND status IN ('pending','unknown')",[orderId])).rows[0].n);
+}
+export {lockedOrder,lockProducts};
+// Who did what to an order: the staff audit log, plus the order's own activity list (shown to staff).
+// detail is short and never holds secrets or full customer data. actor null = the system.
+export async function orderAudit(db,actor,action,id,detail=''){
+ if(actor)await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,$2,'orders',$3)",[actor,action,id]);
+ if(await hasColumn(db,'order_activity','action'))await db.query('INSERT INTO order_activity(order_id,actor,action,detail) VALUES ($1,$2,$3,$4)',[id,actor,action,String(detail).slice(0,300)]);
+}
+// Carriers staff can pick when shipping (free text is allowed too).
+export const CARRIERS=['J&T Express','Pos Laju','Ninja Van','DHL eCommerce','City-Link Express','GDex','Lalamove','Self pickup'];
+function shipment(input,need){
+ const number=String(input.tracking_number??'').trim();if(number.length>80)bad('Tracking number too long');
+ const carrier=String(input.tracking_carrier??'').trim();if(carrier.length>60)bad('Carrier name too long');
+ const url=String(input.tracking_url??'').trim();if(url&&(!/^https:\/\/[^\s]+$/.test(url)||url.length>300))bad('Tracking link must start with https://');
+ if(need&&!number&&!url)bad('Enter a tracking number or link');
+ return {number,carrier,url};
+}
+export async function orderAction(db,id,action,input,actor){
+ if(!input||typeof input!=='object')bad('Object required');
+ const o=await lockedOrder(db,id,input.revision);let detail='',audited=action;
+ const aftersales=await hasColumn(db,'orders','return_status');
+ if(action==='fulfil'){
+  if(o.needs_attention)throw new HttpError(409,'Resolve the payment or stock issue before fulfilment.');
+  if(o.status!=='paid'||o.fulfillment_status==='fulfilled')bad('Only paid, unfulfilled orders can be marked fulfilled');
+  const t=shipment(input,false);
+  if(aftersales)await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,tracking_carrier=$3,tracking_url=$4,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,t.number,t.carrier,t.url]);
+  else await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,t.number]);
+  detail=[t.carrier,t.number].filter(Boolean).join(' ');
+  await queueEmail(db,o.id,'order_fulfilled');
+ }else if(action==='tracking'){
+  // Correct the carrier or tracking after shipping. The customer is not emailed again.
+  if(!aftersales)throw new HttpError(503,'Tracking edits need database migration 013.');
+  if(o.fulfillment_status!=='fulfilled')bad('Mark the order as fulfilled first');
+  const t=shipment(input,true);
+  await db.query('UPDATE orders SET tracking_number=$2,tracking_carrier=$3,tracking_url=$4,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,t.number,t.carrier,t.url]);
+  detail=`was ${[o.tracking_carrier,o.tracking_number].filter(Boolean).join(' ')||'empty'}; now ${[t.carrier,t.number].filter(Boolean).join(' ')}`;
+ }else if(action==='cancel'){
+  if(o.status!=='pending_payment')bad('Only unpaid orders can be cancelled. Record a refund for paid orders.');
+  if((await db.query("SELECT 1 FROM payments WHERE order_id=$1 AND status IN ('pending','succeeded')",[o.id])).rows.length)throw new HttpError(409,'A payment for this order is in progress. Wait for the gateway result.');
+  await release(db,o.id,'cancelled',actor);
+ }else if(action==='refunds'){
+  // A refund staff already made in the eGHL merchant portal, recorded here (no money moves from here).
+  if(o.status!=='paid')bad('Only paid orders can be refunded');
+  const value=input.amount_minor;if(!Number.isInteger(value)||value<1||value>o.total_minor-o.refunded_minor-await refundInFlight(db,o.id))bad('Refund must be between RM 0.01 and the amount not yet refunded (including refunds still waiting for eGHL)');
+  const reference=str(input.reference,'eGHL refund reference',1,80),note=String(input.note??'').trim().slice(0,500),restock=input.restock===true;
+  if(restock&&(await db.query('SELECT 1 FROM refunds WHERE order_id=$1 AND restocked',[o.id])).rows.length)bad('Items for this order were already restocked');
+  const refund=(await db.query('INSERT INTO refunds(order_id,amount_minor,reference,note,restocked,actor) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',[o.id,value,reference,note,restock,actor])).rows[0];
+  if(restock)await restockOrder(db,o,actor,`refund ${reference}`);
+  await db.query('UPDATE orders SET refunded_minor=refunded_minor+$2,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,value]);
+  await queueEmail(db,o.id,'order_refunded',{amount_minor:value,refund_id:String(refund.id)});
+  audited='refund_recorded';detail=`${amount(value)} MYR · ref ${reference}${restock?' · restocked':''}`;
+ }else if(action==='return'){
+  // Return of a paid, shipped order: requested → received (optionally back to stock) → closed.
+  // Money is handled separately with a refund.
+  if(!aftersales)throw new HttpError(503,'Returns need database migration 013.');
+  if(o.status!=='paid'||o.fulfillment_status!=='fulfilled')bad('Only shipped orders can be returned');
+  const step=input.step,note=String(input.note??'').trim().slice(0,500);
+  const next={request:['none','requested'],receive:['requested','received'],close:['received','closed']}[step];
+  if(!next)bad('Invalid return step');
+  if(o.return_status!==next[0])throw new HttpError(409,`The return is ${o.return_status==='none'?'not started':o.return_status}; reload the order.`);
+  let units=0;
+  if(step==='receive'&&input.restock===true){
+   if((await db.query('SELECT 1 FROM refunds WHERE order_id=$1 AND restocked',[o.id])).rows.length)bad('Items for this order were already restocked with a refund');
+   units=await restockOrder(db,o,actor,'return received');
+  }
+  await db.query(`UPDATE orders SET return_status=$2,return_note=CASE WHEN $3='' THEN return_note ELSE left(trim(return_note||' '||$3),500) END${step==='receive'?',returned_at=now()':''},revision=revision+1,updated_at=now() WHERE id=$1`,[o.id,next[1],note]);
+  audited='return_'+next[1];detail=[note,units?`${units} unit${units===1?'':'s'} back to stock`:''].filter(Boolean).join(' · ');
+ }else if(action==='resolve'){
+  if(!o.needs_attention)bad('Nothing to resolve');
+  const note=str(input.note,'Resolution note',1,300);
+  await db.query("UPDATE orders SET needs_attention=false,attention_note=trim(attention_note||' Resolved: '||$2),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,note]);
+  detail=note;
+ }else throw new HttpError(404,'Not found');
+ await orderAudit(db,actor,audited,o.id,detail);
+ return orderDetail(db,o.id);
+}
+// Customers are derived from paid orders until the JS Membership integration is defined.
+export async function listCustomers(db,params){
+ const q=(params.get('q')??'').trim();if(q.length>150)bad('Search too long');
+ const limit=Number(params.get('limit')??25),offset=Number(params.get('offset')??0);if(!Number.isInteger(limit)||limit<1||limit>100||!Number.isInteger(offset)||offset<0)bad('Invalid paging');
+ const args=q?['%'+q+'%']:[],filter=q?' AND (email ILIKE $1 OR customer_name ILIKE $1 OR phone ILIKE $1)':'';
+ const base=`FROM orders WHERE status='paid'${filter} GROUP BY lower(email)`;
+ const total=Number((await db.query(`SELECT count(*) AS n FROM (SELECT 1 ${base}) x`,args)).rows[0].n);
+ const rows=(await db.query(`SELECT lower(email) AS email,(array_agg(customer_name ORDER BY id DESC))[1] AS name,(array_agg(phone ORDER BY id DESC))[1] AS phone,(array_agg(state ORDER BY id DESC))[1] AS state,count(*)::int AS orders,sum(total_minor-refunded_minor)::bigint AS spent_minor,max(paid_at) AS last_order_at ${base} ORDER BY max(paid_at) DESC LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,offset])).rows;
+ return {items:rows.map(r=>({...r,spent_minor:Number(r.spent_minor)})),total,limit,offset};
+}
+export async function shippingRates(db){return (await db.query('SELECT profile,name,price_minor,min_subtotal_minor,min_weight_grams,max_weight_grams FROM shipping_rates WHERE active ORDER BY profile,price_minor')).rows;}
+export {randomUUID};

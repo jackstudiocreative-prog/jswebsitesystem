@@ -6,7 +6,9 @@
     "test": "node --test tests/*.test.mjs",
     "migrate": "node src/migrate.mjs",
     "start": "node src/server.mjs",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "e2e": "node scripts/build.mjs && playwright test",
+    "demo": "node scripts/build.mjs && node scripts/e2e-server.mjs --demo"
   },
   "engines": {
     "node": ">=22.13.0"
@@ -15,10 +17,16 @@
     "@supabase/supabase-js": "^2.118.0",
     "cloudinary": "^2.11.0",
     "jose": "^6.2.15",
+    "liquidjs": "^10.30.1",
     "pg": "^8.23.1"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
     "@electric-sql/pglite": "^0.5.15",
-    "esbuild": "^0.28.2"
+    "@fontsource/bebas-neue": "5.3.0",
+    "@fontsource/inter": "5.3.0",
+    "@playwright/test": "^1.64.1",
+    "esbuild": "^0.28.2",
+    "linkedom": "^0.18.15"
   }
 }

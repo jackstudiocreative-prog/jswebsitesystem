@@ -2,10 +2,12 @@
 
 **Status: development prototype — not a production commerce service.**
 
-There are currently two entry points:
+There are three development entry points:
 
 1. [`index.html`](./index.html) — a **public GitHub Pages demo**, using browser-local storage. Anyone can open it. It is not an authenticated administration system and does not synchronize changes between devices.
 2. [`jackstudio-admin-mvp/`](./jackstudio-admin-mvp/) — a **locally running Node.js + SQLite backend** with login, products, media uploads, orders demo data, and editable website content. It is not deployed by GitHub Pages.
+
+3. [`v3/`](./v3/) — authenticated PostgreSQL + Supabase Auth + Cloudinary staging application. The catalogue admin review adds real product/collection editing and private media selection. It requires reviewed Migration 004 before deployment; no hosted migration or deployment is performed by this change. See [Phase 1 scope and release gates](docs/V3-CATALOG-ADMIN.md).
 
 ## Try the public demo
 
