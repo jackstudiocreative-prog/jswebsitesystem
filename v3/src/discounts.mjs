@@ -142,7 +142,7 @@ export async function release(db,orderId){
 export async function reclaim(db,orderId){
  if(!await available(db))return;
  const rows=(await db.query('UPDATE order_discounts SET released=false WHERE order_id=$1 AND released RETURNING discount_id',[orderId])).rows;
- for(const r of rows)await db.query('UPDATE discounts SET used_count=used_count+1 WHERE id=$1',[r.discount_id]);
+ for(const r of rows)await db.query('UPDATE discounts SET used_count=CASE WHEN usage_limit IS NULL THEN used_count+1 ELSE least(used_count+1,usage_limit) END WHERE id=$1',[r.discount_id]);
 }
 export async function orderDiscounts(db,orderId){
  if(!await available(db))return [];

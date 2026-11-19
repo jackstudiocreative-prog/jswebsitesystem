@@ -340,3 +340,14 @@ body:not(.admin-2026){color:var(--js-espresso);background:var(--js-ivory)}
 .js-code-msg:empty{display:none}
 .js-summary .js-discount{color:#4f6b4b}
 @media (max-width:640px){.js-code{max-width:none;margin-left:0}}
+/* Batch 5: order actions (payment check, shipment, returns, two kinds of refund), activity */
+.admin-2026 .order-action{border-top:1px solid var(--js-line);padding-top:14px;margin-top:14px}
+.admin-2026 .order-action h3{font:600 15px/1.4 Inter,sans-serif;margin:0 0 8px;color:var(--js-espresso)}
+.admin-2026 .order-action details summary{cursor:pointer;font-weight:600;margin:8px 0}
+.admin-2026 .order-action .refund-form{border:1px solid var(--js-line);border-radius:10px;padding:12px 14px;margin:10px 0;background:var(--js-surface)}
+.admin-2026 .order-action .refund-form h4{font:600 14px/1.4 Inter,sans-serif;margin:0 0 4px}
+.admin-2026 .order-action button{margin:6px 8px 0 0}
+.admin-2026 .order-action label:has(input[type=checkbox]){flex-direction:row;align-items:center}
+.admin-2026 .badge.return-requested,.admin-2026 .badge.return-received{background:#f5e7ce;color:#76501f}
+.admin-2026 .badge.return-closed{background:#e7e7e2;color:#5d5a52}
+.admin-2026 .activity-list li{font-size:12.5px}
