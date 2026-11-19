@@ -38,7 +38,7 @@ createServer(async(req,res)=>{
  if(target==='/admin.js'){res.setHeader('Content-Type','text/javascript');return res.end(adminJs);}
  const name=target.endsWith('/')?target+'index.html':target; // "/" is the storefront home
  try{const file=await readFile(new URL('public'+name,root));res.setHeader('Content-Type',types[name.slice(name.lastIndexOf('.'))]??'application/octet-stream');res.end(file);}
- catch{res.statusCode=404;res.end('Not found');}
+ catch{res.statusCode=404;if(!/\.[a-z0-9]+$/i.test(name)){try{res.setHeader('Content-Type','text/html; charset=utf-8');return res.end(await readFile(new URL('public/404.html',root)));}catch{}}res.end('Not found');}
 }).listen(port,'127.0.0.1',async()=>{
  if(!demo)return console.log('e2e harness on',port);
  const call=async(path,body,method='POST',role='editor')=>{const r=await fetch(`http://127.0.0.1:${port}/api/v3/`+path,{method,headers:{Authorization:'Bearer '+role,'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const j=await r.json();if(!r.ok)throw Error(path+': '+j.error);return j;};

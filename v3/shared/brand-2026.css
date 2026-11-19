@@ -291,3 +291,23 @@ body:not(.admin-2026){color:var(--js-espresso);background:var(--js-ivory)}
 .admin-2026 .theme-tree-item.is-selected :is(.theme-icon,.theme-eye,.theme-more summary){color:var(--js-ivory)}
 @media(max-width:1279px){.admin-2026 .theme-editor.with-settings{grid-template-columns:minmax(260px,320px) minmax(0,1fr)}.admin-2026 .theme-editor.with-settings .theme-inspector{grid-column:1;grid-row:2;position:static;max-height:none}.admin-2026 .theme-editor.with-settings .theme-preview{grid-column:2;grid-row:1/span 2}}
 @media(max-width:1000px){.admin-2026 .theme-editor.with-settings{grid-template-columns:1fr}.admin-2026 .theme-editor.with-settings :is(.theme-inspector,.theme-preview){grid-column:1;grid-row:auto}.admin-2026 .theme-inspector{order:2}.admin-2026 .theme-preview{order:3;position:static}}
+/* Listing pages (collection, search): filters beside results on wide screens, collapsible on small ones. */
+.js-listing{display:grid;grid-template-columns:240px minmax(0,1fr);gap:32px;align-items:start}
+.js-filter-box>summary{display:none}
+.js-filters{display:grid;gap:18px}
+.js-filters fieldset{border:0;border-top:1px solid var(--js-line);padding:14px 0 0;margin:0;display:grid;gap:8px;min-width:0}
+.js-filters legend{font:600 13px/1.4 Inter,sans-serif;color:var(--js-espresso);padding:0 0 6px}
+.js-filters .js-check{font:400 14px/1.4 Inter,sans-serif;color:var(--js-olive)}
+.js-shop .js-filters .js-check input{width:18px;height:18px;min-height:auto;flex:0 0 18px}
+.js-price{grid-template-columns:1fr 1fr}
+.js-price legend{grid-column:1/-1}
+.js-price label{display:grid;gap:4px;font-size:12px;color:var(--js-olive)}
+.js-price input{width:100%;min-width:0}
+.js-filter-actions{display:flex;flex-wrap:wrap;gap:12px;align-items:center}
+.js-results{min-width:0}
+.js-search-form{display:flex;gap:10px;max-width:640px;margin:8px 0 12px}
+.js-search-form input{flex:1;min-width:0}
+.js-policies{font:400 13px/1.6 Inter,sans-serif;color:var(--js-olive);margin:14px 0 0}
+.js-policies a{color:var(--js-olive)}
+.js-wish-item{display:grid;gap:6px;justify-items:start}
+@media(max-width:899px){.js-listing{grid-template-columns:minmax(0,1fr);gap:16px}.js-filter-box>summary{display:block;cursor:pointer;border:1px solid var(--js-line);border-radius:8px;padding:10px 14px;font:600 14px/1.4 Inter,sans-serif;color:var(--js-olive)}.js-filter-box[open]>summary{margin-bottom:12px}}

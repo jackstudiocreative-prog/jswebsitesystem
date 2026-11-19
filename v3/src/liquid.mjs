@@ -70,6 +70,9 @@ export async function loadContext(db,refs,{mediaUrl=null,publicImages=false}={})
  return {img,fileImage,collection};
 }
 
+// Storefront features. Customer accounts are not available yet (batch 4).
+export const FEATURES={customer_accounts:false,search:true,wishlist:true};
+const FEATURE_SETTINGS={show_account:'customer_accounts',show_search:'search',show_wishlist:'wishlist'};
 // Collects every image and collection referenced by the sections' settings (by schema type).
 export function references(sections){
  const refs={images:new Set(),collections:new Set(['all'])};
@@ -162,6 +165,9 @@ export async function renderPage(db,handle,template,options={}){
   const schema=SECTION_SCHEMAS[s.type];
   const blocks=(s.block_order??Object.keys(s.blocks??{})).map(id=>({id,...s.blocks[id]})).filter(b=>b.type&&!b.disabled).map(b=>({id:b.id,type:b.type,settings:resolveSettings(blockSchema(s.type,b.type),b.settings,ctx),shopify_attributes:''}));
   const section={id:s.id,settings:resolveSettings(schema,s.settings,ctx),blocks,index:list.indexOf(s)+1};
+  // Entry points for features this store does not offer yet are not shown, whatever the imported
+  // theme says (no account sign-in until customer accounts exist; see FEATURES).
+  for(const [key,feature] of Object.entries(FEATURE_SETTINGS))if(key in section.settings&&!FEATURES[feature])section.settings[key]=false;
   let out;try{out=await liquid().parseAndRender(SECTIONS[s.type],{...globals,section});}
   catch(e){out=`<!-- section ${esc(s.type)} failed to render -->`;if(options.strict)throw e;}
   const split=extract(out,s.id);scripts.push(...split.scripts);

@@ -21,6 +21,8 @@ await cp(new URL('web/theme-assets/',root),new URL('public/theme-assets/',root),
 await cp(new URL('showroom/',root),new URL('public/showroom/',root),{recursive:true});
 await copyFile(new URL('web/page.html',root),new URL('public/page.html',root));
 await copyFile(new URL('web/shop.html',root),new URL('public/shop.html',root));
+// Unknown addresses: Vercel serves 404.html with status 404; the storefront script shows "Page not found".
+await copyFile(new URL('web/shop.html',root),new URL('public/404.html',root));
 const url=process.env.SUPABASE_URL??'',key=process.env.SUPABASE_PUBLISHABLE_KEY??'';
 if(url&&new URL(url).protocol!=='https:')throw Error('HTTPS Supabase URL required');
 if(key&&!key.startsWith('sb_publishable_'))throw Error('Only a Supabase publishable key may enter the browser build');
