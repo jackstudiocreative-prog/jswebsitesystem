@@ -33,7 +33,9 @@ test('website editor builds sections, previews unsaved edits and saves through t
  const find=text=>[...document.querySelectorAll('button')].find(b=>b.textContent===text);
  const ui=mountAdmin(api,'editor',()=>{});
  try{
+  // Pages are managed on their own page (Online Store › Pages); Themes links there.
   document.querySelector('[data-view="Website"]').click();await settle();
+  find('Manage pages').click();await settle();
   assert.match(document.getElementById('admin-content').textContent,/\/pages\/home/);
   find('Edit').click();await settle();
   assert.equal(document.querySelectorAll('.section-item').length,1);

@@ -6,9 +6,22 @@ import {createThemes} from './theme-ui.mjs';
 import {moneyToMinor,formatPrice} from './money.mjs';
 import {createOrders} from './orders-ui.mjs';
 export {moneyToMinor,formatPrice};
-export function mountAdmin(api,role,notify){
+// Page titles, where each page sits in the navigation, and what it is for (one line, no marketing copy).
+const PAGES={
+ Dashboard:{title:'Dashboard',about:'What needs your attention today.'},
+ Orders:{title:'Orders',about:'Payments, shipping, cancellations and refunds for every order.'},
+ Products:{title:'Products',about:'Everything you sell. Customers see a product when it is Active and in at least one active collection.'},
+ Collections:{title:'Collections',parent:'Products',about:'Groups of products. Active collections appear in the store; their product order is the “Featured” sort.'},
+ Inventory:{title:'Inventory',parent:'Products',about:'Stock for every variant. Each change is recorded with a reason.'},
+ Customers:{title:'Customers',about:'People who have placed orders, built from their orders.'},
+ 'Media Library':{title:'Media',about:'Product and page images. Originals stay private; the store shows resized copies of published images only.'},
+ Website:{title:'Themes',parent:'Online Store',about:'How the whole store looks: header, footer, home page and the templates for products, collections and pages. Customers only see the published theme.'},
+ Pages:{title:'Pages',parent:'Online Store',about:'Standalone content such as About us or policies. Pages are shown inside the published theme’s header and footer.'},
+ Settings:{title:'Settings',about:'Shipping rates, payments and store details.'}
+};
+export function mountAdmin(api,role,notify,account={}){
  const root=document.getElementById('admin-content'),upload=document.getElementById('media-upload');
- let view='Dashboard',offset=0,search='',status='',collection='',inventoryFilter='',listed='',generation=0,dirty=false;
+ let view='Dashboard',offset=0,search='',status='',collection='',inventoryFilter='',listed='',sort='',generation=0,dirty=false;
  const readOnly=role==='viewer';
  const el=(tag,text,cls)=>{const n=document.createElement(tag);if(text!==undefined)n.textContent=text;if(cls)n.className=cls;return n;};
  const button=(text,fn,disabled=false)=>{const n=el('button',text);n.type='button';n.disabled=disabled;n.addEventListener('click',async()=>{n.disabled=true;try{await fn();}catch(e){notify(e.message);}finally{n.disabled=disabled;}});return n;};
@@ -86,8 +99,12 @@ export function mountAdmin(api,role,notify){
  const field=(label,value='',type='text')=>{const wrap=el('label',label),input=el(type==='textarea'?'textarea':'input');if(type!=='textarea')input.type=type;input.value=value??'';wrap.append(input);return {wrap,input};};
  const select=(values,current)=>{const n=el('select');for(const [value,label] of values){const o=el('option',label);o.value=value;n.append(o);}n.value=current;return n;};
  const all=async resource=>{let rows=[],n=0;do{const page=await api(`${resource}?paged=true&limit=100&offset=${n}`);rows.push(...page.items);n+=page.items.length;if(n>=page.total||!page.items.length)return rows;}while(true);};
- function header(title,description){root.replaceChildren();const h=el('div',undefined,'page-heading'),copy=el('div');copy.append(el('p','JACK STUDIO / COMMERCE','eyebrow'),el('h1',title),el('p',description,'muted'));h.append(copy);root.append(h);return h;}
- function empty(text){root.append(el('div',text,'empty-state'));}
+ // Every page: breadcrumb, title, one-line purpose, and the page's main action on the right.
+ function header(title,description,primary){root.replaceChildren();const info=PAGES[title]??{title,about:description};const h=el('div',undefined,'page-heading'),copy=el('div');
+  if(info.parent){const crumb=el('p',undefined,'breadcrumb');crumb.append(el('span',info.parent),el('span',' / ','crumb-sep'),el('span',info.title));copy.append(crumb);}
+  const t=el('h1',info.title);copy.append(t,el('p',info.about??description,'muted'));h.append(copy);
+  const actions=el('div',undefined,'page-actions');if(readOnly)actions.append(el('span','Read only','badge read-only-badge'));if(primary)actions.append(primary);h.append(actions);root.append(h);return h;}
+ function empty(text,action){const box=el('div',undefined,'empty-state');box.append(el('p',text));if(action)box.append(action);root.append(box);}
  function table(headings){const box=el('div',undefined,'table-wrap'),t=el('table'),head=el('thead'),tr=el('tr'),body=el('tbody');for(const text of headings)tr.append(el('th',text));head.append(tr);t.append(head,body);box.append(t);root.append(box);return body;}
  function cell(tr,text){tr.append(el('td',text));}
  function badge(tr,text){const td=el('td');td.append(el('span',text,'badge '+text));tr.append(td);}
@@ -303,13 +320,12 @@ export function mountAdmin(api,role,notify){
  const themes=createThemes({api,root,notify,readOnly,el,button,field,select,header,empty,all,thumb,previews,mediaPicker,navigate,setDirty:v=>{dirty=v;},ticket:()=>++generation,current:t=>t===generation});
  const sales=createOrders({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,navigate:v=>navigate(v,true),ticket:()=>++generation,current:t=>t===generation});
  async function render(){
-  const ticket=++generation;upload.hidden=view!=='Media Library';header(view,readOnly?'Viewer access · Read only':'Staging workspace · Changes persist in the shared database');
+  const ticket=++generation;upload.hidden=view!=='Media Library';header(view,'');
   if(view==='Orders'){await sales.orders(ticket);return;}
   if(view==='Customers'){await sales.customers(ticket);return;}
   if(view==='Settings'){await sales.settings(ticket);return;}
   if(view==='Dashboard'){
    const d=await api('dashboard');if(ticket!==generation)return;
-   root.querySelector('.page-heading .muted').textContent='Your store at a glance. Start with what needs your attention.';
    const grid=el('div',undefined,'metrics dashboard-primary');
    for(const [label,key,destination] of [['Net paid revenue','revenue_minor','Orders'],['Paid orders','paid_orders','Orders'],['Active products','active','Products'],['To fulfil','to_fulfil','Orders']]){
     const card=el('section',undefined,'card metric');card.append(el('span',label,'muted'),el('strong',key==='revenue_minor'?formatPrice(Number(d[key]??0)):String(d[key]??0)),button('View '+destination.toLowerCase(),()=>navigate(destination)));grid.append(card);
@@ -321,39 +337,66 @@ export function mountAdmin(api,role,notify){
     {label:'Orders to fulfil',count:n('to_fulfil'),note:'Paid, not yet shipped',go:()=>{sales.filterOrders('unfulfilled');return navigate('Orders',true);}},
     {label:'Orders needing review',count:n('attention_orders'),note:'Payment or stock issue to check',go:()=>{sales.filterOrders('attention');return navigate('Orders',true);}},
     {label:'Variants low on stock',count:n('low_stock'),note:`In ${plural(n('products_low_stock'),'product','products')} · ${d.low_stock_at??5} or fewer left`,go:()=>navigate('Inventory',false,{stock:'low'})},
-    {label:'Variants out of stock',count:n('out_of_stock'),note:`${plural(n('products_out_of_stock'),'product is','products are')} completely sold out`,go:()=>navigate('Inventory',false,{stock:'out'})},
+    {label:'Variants out of stock',count:n('out_of_stock'),note:n('products_out_of_stock')?`${plural(n('products_out_of_stock'),'product is','products are')} completely sold out`:'Other variants of these products are still in stock',go:()=>navigate('Inventory',false,{stock:'out'})},
     {label:'Active products not shown in the store',count:n('active_unlisted'),note:'Not in any active collection, so customers cannot find them',go:()=>navigate('Products',false,{status:'active',listed:'no'})},
     {label:'Online store has no published theme',count:n('live_themes')?0:1,note:n('themes')?'A theme is saved but not published. Preview it, then publish when ready.':'Create a theme for the storefront.',go:()=>navigate('Website')},
     {label:'Unpublished page drafts',count:n('draft_pages'),note:'Pages with changes not yet published',go:()=>navigate('Pages')}
    ];
    let pending=0;for(const a of actions){if(!a.count)continue;pending++;const row=el('div',undefined,'task-row');const text=el('span');text.append(el('span',a.label),el('small',a.note,'cell-note'));row.append(text,el('strong',String(a.count)),button('Review',a.go));row.querySelector('button').setAttribute('aria-label','Review '+a.label.toLowerCase());tasks.append(row);}
    if(!pending)tasks.append(el('p','You’re all caught up. No pending tasks in these categories.','dashboard-clear'));
-   const shortcuts=el('section',undefined,'card dashboard-shortcuts');shortcuts.append(el('p','YOUR WORKSPACE','eyebrow'),el('h2','Make room for what’s next.'),el('p','Made for the everyday. Managed with care.','brand-tagline'));
-   for(const [label,dest] of [['Manage products','Products'],['Review orders','Orders'],['Review inventory','Inventory'],['Edit website','Website'],['Open media library','Media Library']])shortcuts.append(button(label,()=>navigate(dest)));
-   columns.append(tasks,shortcuts);root.append(columns);
+   columns.append(tasks);root.append(columns);
    const details=el('details',undefined,'dashboard-details');details.append(el('summary','More store metrics'));const secondary=el('div',undefined,'metrics');
    for(const [label,key] of [['All products','products'],['Draft products','drafts'],['Collections','collections'],['Ready images','media'],['Active variants (all products)','variants'],['Awaiting payment','pending_orders'],['Emails waiting to send','emails_waiting'],['Published pages','published_pages']]){const item=el('div',undefined,'card');item.append(el('span',label,'muted'),el('strong',String(d[key]??0)));secondary.append(item);}details.append(secondary);root.append(details,el('p','All-time totals. Orders are paid through eGHL; revenue counts paid orders net of refunds.','muted'));return;
   }
   if(view==='Pages'){await website.list(ticket);return;}
   if(view==='Inventory'){await inventoryView(ticket);return;}
   // Online Store: current theme and theme library, then the pages list.
-  if(view==='Website'){await themes.overview(ticket);if(ticket!==generation)return;const pages=el('details',undefined,'website-pages-panel');pages.append(el('summary','Pages'));root.append(pages);const before=new Set(root.children);await website.list(ticket);if(ticket!==generation)return;for(const child of [...root.children])if(!before.has(child))pages.append(child);return;}
+  if(view==='Website'){await themes.overview(ticket);if(ticket!==generation)return;
+   // How themes and pages relate, with a way to the pages list (pages are edited there, not here).
+   const rel=el('section',undefined,'card relation-card');rel.append(el('h2','Themes and pages'),el('p','The published theme decides the header, footer, home page and the layout of product, collection and cart pages. Pages (About us, policies, campaigns) are separate content that appears inside that theme.','muted'),button('Manage pages',()=>navigate('Pages')));root.append(rel);return;}
   const resource=view==='Products'?'products':view==='Collections'?'collections':'media';
-  const params=new URLSearchParams({paged:'true',limit:'25',offset:String(offset),q:search});if(status)params.set('status',status);if(collection&&resource==='products')params.set('collection',collection);if(listed&&resource==='products')params.set('listed',listed);
+  const params=new URLSearchParams({paged:'true',limit:'25',offset:String(offset),q:search});if(status)params.set('status',status);if(collection&&resource==='products')params.set('collection',collection);if(listed&&resource==='products')params.set('listed',listed);if(sort&&resource==='products')params.set('sort',sort);
+  if(resource!=='media'){const add=button('Add '+(resource==='products'?'product':'collection'),()=>resource==='products'?editProduct():editCollection(),readOnly);add.classList.add('primary');root.querySelector('.page-actions').append(add);}
   const data=await api(resource+'?'+params);if(ticket!==generation)return;
   const tools=el('form',undefined,'toolbar'),q=field('Search',search,'search'),filter=select([['','All statuses'],...(resource==='media'?['ready','pending']:['draft','active',...(resource==='products'?['archived']:[])]).map(x=>[x,x])],status);filter.setAttribute('aria-label','Filter by status');const find=el('button','Apply filters');tools.append(q.wrap,filter,find);root.append(tools);tools.addEventListener('submit',e=>{e.preventDefault();search=q.input.value;status=filter.value;offset=0;render().catch(e=>notify(e.message));});
   if(resource==='products'){const collections=await all('collections');if(ticket!==generation)return;const choose=select([['','All collections'],...collections.map(c=>[String(c.id),c.title])],collection);choose.setAttribute('aria-label','Filter by collection');tools.insertBefore(choose,find);choose.addEventListener('change',()=>{collection=choose.value;});
    const vis=select([['','Any store visibility'],['yes','Shown in store'],['no','Active but not shown']],listed);vis.setAttribute('aria-label','Filter by store visibility');tools.insertBefore(vis,find);vis.addEventListener('change',()=>{listed=vis.value;});}
-  if(resource!=='media')tools.append(button('Add '+(resource==='products'?'product':'collection'),()=>resource==='products'?editProduct():editCollection(),readOnly));
+  if(resource==='products'){const order=select([['','Newest first'],['oldest','Oldest first'],['title','Title A–Z'],['title-desc','Title Z–A'],['price-asc','Price, low to high'],['price-desc','Price, high to low'],['inventory-asc','Inventory, low to high'],['inventory-desc','Inventory, high to low']],sort);order.setAttribute('aria-label','Sort products');tools.insertBefore(order,find);order.addEventListener('change',()=>{sort=order.value;offset=0;render().catch(e=>notify(e.message));});}
+  const filtered=!!(search||status||collection||listed);
+  const clear=()=>{search='';status='';collection='';listed='';offset=0;return show();};
+  if(filtered)tools.append(button('Clear filters',clear));
   if(resource==='media'||resource==='products'){const importTools=el('details',undefined,'import-tools');importTools.open=resource==='media'?importer.running:catalogRun.running;importTools.append(el('summary','Import & sync with Shopify'),resource==='media'?importCard():catalogCard());root.append(importTools);}
-  root.append(el('p',`${data.total} records · Showing ${data.items.length?offset+1:0}–${offset+data.items.length}`,'muted'));
-  if(!data.items.length)empty(search||status?'No matching records. Adjust your filters.':'Your collection starts here. Add your first record.');
+  const noun={products:['product','products'],collections:['collection','collections'],media:['image','images']}[resource];
+  root.append(el('p',data.total?`Showing ${offset+1}–${offset+data.items.length} of ${data.total} ${data.total===1?noun[0]:noun[1]}${filtered?' (filtered)':''}`:'','result-count'));
+  if(!data.items.length)empty(filtered?`No ${noun[1]} match these filters.`:resource==='media'?'No images yet. Upload one below or import from Shopify.':`No ${noun[1]} yet.`,filtered?button('Clear filters',clear):null);
   else if(resource==='media'){const grid=el('div',undefined,'media-grid');root.append(grid);const shots=[];for(const m of data.items){const box=el('article',undefined,'card media-card'),name=m.label||m.object_key.split('/').pop();if(m.state==='ready'){const frame=el('div',undefined,'media-thumb'),img=thumb(name);frame.append(img);box.append(frame);shots.push({id:m.id,img});}box.append(el('strong',name,'media-label'),el('small',`${m.width??'?'} × ${m.height??'?'} · ${m.bytes>=1e6?(m.bytes/1e6).toFixed(1)+' MB':Math.max(1,Math.round(m.bytes/1e3))+' KB'} · ${m.state}`));grid.append(box);}previews(shots);root.append(el('p','Images load as private previews that expire after five minutes; use Refresh data to reload them. Link images from the product editor.','muted'));}
   else {const body=table(resource==='products'?['Product','Status','SKU','Price','Inventory','Action']:['Collection','Status','Order','Action']);for(const row of data.items){const tr=el('tr');if(resource==='products'&&row.status==='active'&&row.listed===false){const t=el('td');t.append(el('span',row.title),el('small','Not shown in store: add it to an active collection','cell-note'));tr.append(t);}else cell(tr,row.title);badge(tr,row.status);if(resource==='products'){const many=row.variant_count>1;cell(tr,(row.sku||'—')+(many?` · ${row.variant_count} variants`:''));cell(tr,(many?'From ':'')+formatPrice(row.price_minor));cell(tr,String(row.inventory));}else cell(tr,String(row.position));const td=el('td');td.append(button(readOnly?'View':'Edit',()=>resource==='products'?editProduct(row.id):editCollection(row.id)));tr.append(td);body.append(tr);}}
   const pages=el('div',undefined,'pagination');pages.append(button('Previous',()=>{offset=Math.max(0,offset-25);return render();},offset===0),button('Next',()=>{offset+=25;return render();},offset+data.items.length>=data.total));root.append(pages);
  }
- async function navigate(next,keep=false,preset={}){if(!keep&&next==='Orders')sales?.resetOrders();if(dirty&&!window.confirm('Discard unsaved edits?'))return;dirty=false;view=next;offset=0;search='';status=preset.status??'';collection='';inventoryFilter=preset.stock??'';listed=preset.listed??'';for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');}for(const g of document.querySelectorAll('.nav-group'))g.classList.toggle('open',!!g.querySelector('[data-view].active'));await render();}
+ async function navigate(next,keep=false,preset={}){if(!keep&&next==='Orders')sales?.resetOrders();if(dirty&&!window.confirm('Discard unsaved edits?'))return;dirty=false;view=next;offset=0;search='';status=preset.status??'';collection='';inventoryFilter=preset.stock??'';listed=preset.listed??'';sort='';for(const b of document.querySelectorAll('[data-view]')){b.classList.toggle('active',b.dataset.view===view);b.setAttribute('aria-current',b.dataset.view===view?'page':'false');}for(const g of document.querySelectorAll('.nav-group'))g.classList.toggle('open',!!g.querySelector('[data-view].active'));closeNav();await show();}
+ // Loading and error states for every page: the page title appears at once; a failure offers Retry.
+ async function show(){
+  const ticket=generation+1;const pending=setTimeout(()=>{if(generation===ticket&&!root.querySelector('.loading-state,.error-state')&&root.children.length<=1)root.append(el('p','Loading…','loading-state'));},150);
+  try{await render();}
+  catch(e){if(generation!==ticket)return;const box=el('div',undefined,'error-state');box.setAttribute('role','alert');box.append(el('p','This page could not be loaded: '+e.message),button('Retry',()=>show()));root.append(box);}
+  finally{clearTimeout(pending);if(generation===ticket)root.querySelector('.loading-state')?.remove();}
+ }
+ // Shell: account menu (who is signed in, change password, sign out) and the collapsible menu on small screens.
+ const ws=document.getElementById('workspace'),toggle=document.getElementById('nav-toggle'),accountBtn=document.getElementById('account-button'),accountMenu=document.getElementById('account-menu');
+ function closeNav(){ws?.classList.remove('nav-open');toggle?.setAttribute('aria-expanded','false');}
+ const onToggle=()=>{const open=!ws.classList.contains('nav-open');ws.classList.toggle('nav-open',open);toggle.setAttribute('aria-expanded',String(open));if(open)ws.querySelector('[data-view].active')?.focus();};
+ const closeAccount=(focus=false)=>{if(!accountMenu||accountMenu.hidden)return;accountMenu.hidden=true;accountBtn.setAttribute('aria-expanded','false');if(focus)accountBtn.focus();};
+ const onAccount=()=>{const open=accountMenu.hidden;accountMenu.hidden=!open;accountBtn.setAttribute('aria-expanded',String(open));if(open)accountMenu.querySelector('button')?.focus();};
+ const onKey=e=>{if(e.key!=='Escape')return;if(accountMenu&&!accountMenu.hidden)closeAccount(true);else if(ws?.classList.contains('nav-open')){closeNav();toggle.focus();}};
+ const onOutside=e=>{if(accountMenu&&!accountMenu.hidden&&!accountMenu.contains(e.target)&&!accountBtn.contains(e.target))closeAccount();};
+ const accountActions=[['account-password',()=>account.changePassword?.()],['account-signout',()=>account.signOut?.()]].map(([id,fn])=>{const b=document.getElementById(id);const h=async()=>{closeAccount();try{await fn();}catch(e){notify(e.message);}};b?.addEventListener('click',h);return [b,h];});
+ if(accountBtn){accountBtn.querySelector('.account-name').textContent=account.email||'Account';accountMenu.querySelector('.account-email').textContent=account.email||'';accountMenu.querySelector('.account-role').textContent={admin:'Administrator',editor:'Editor',viewer:'Viewer (read only)'}[role]??role;accountBtn.querySelector('.account-avatar').textContent=(account.email||'JS').slice(0,2).toUpperCase();accountBtn.addEventListener('click',onAccount);}
+ toggle?.addEventListener('click',onToggle);document.addEventListener('keydown',onKey);document.addEventListener('click',onOutside);
+ // Wide tables scroll sideways on small screens; make every table area reachable by keyboard and named.
+ const tables=typeof MutationObserver==='undefined'?{observe(){},disconnect(){}}:new MutationObserver(()=>{for(const w of root.querySelectorAll('.table-wrap:not([tabindex])')){w.tabIndex=0;w.setAttribute('role','region');w.setAttribute('aria-label',(w.querySelector('th')?.textContent||'Data')+' table');}});
+ tables.observe(root,{childList:true,subtree:true});
+ function teardownShell(){tables.disconnect();toggle?.removeEventListener('click',onToggle);accountBtn?.removeEventListener('click',onAccount);document.removeEventListener('keydown',onKey);document.removeEventListener('click',onOutside);for(const [b,h] of accountActions)b?.removeEventListener('click',h);closeNav();closeAccount();}
  const navigation=[...document.querySelectorAll('[data-view]')].map(b=>{const fn=()=>navigate(b.dataset.view).catch(e=>notify(e.message));b.addEventListener('click',fn);return [b,fn];});
  const unload=e=>{if(dirty){e.preventDefault();e.returnValue='';}};window.addEventListener('beforeunload',unload);
- return {reload:()=>navigate(view),destroy(){importer.stop=true;catalogRun.stop=true;for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};
+ return {reload:()=>navigate(view),destroy(){teardownShell();importer.stop=true;catalogRun.stop=true;for(const [b,fn]of navigation)b.removeEventListener('click',fn);generation++;root.replaceChildren();window.removeEventListener('beforeunload',unload);}};
 }

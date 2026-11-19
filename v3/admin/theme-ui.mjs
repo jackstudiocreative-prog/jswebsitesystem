@@ -96,8 +96,11 @@ export function createThemes(h){
   if(!theme.is_live)actions.append(button(dirty?'Save and publish':'Publish',async()=>{if(!confirmed(`Publish "${theme.name}"? It replaces the current theme on the storefront.`))return;if(dirty)await persist();await api(`themes/${id}/publish`,{revision:theme.revision},'POST');dirty=false;setDirty(false);notify(`${theme.name} is now live.`);await navigate('Website');},readOnly));
   actions.append(button('Back to Online Store',()=>navigate('Website')));
   bar.append(devices,actions);root.append(bar);
-  const layout=el('div',undefined,'theme-editor'),panel=el('section',undefined,'card theme-panel'),previewCard=el('section',undefined,'card theme-preview'),note=el('p','','muted');
-  previewCard.append(note,frame.stage);layout.append(panel,previewCard);root.append(layout);
+  // Three parts, as in Shopify's editor: section tree (left), live preview (centre) and the selected
+  // section's settings (right on wide screens, under the tree on smaller ones).
+  const layout=el('div',undefined,'theme-editor'),panel=el('section',undefined,'card theme-panel'),previewCard=el('section',undefined,'card theme-preview'),inspector=el('section',undefined,'card theme-inspector'),note=el('p','','muted');
+  panel.setAttribute('aria-label','Sections');inspector.setAttribute('aria-label','Section settings');previewCard.setAttribute('aria-label','Preview');inspector.hidden=true;
+  previewCard.append(note,frame.stage);layout.append(panel,previewCard,inspector);root.append(layout);
   async function persist(){const saved=await api('themes/'+id,{revision:theme.revision,content},'PATCH');theme.revision=saved.revision;dirty=false;setDirty(false);return saved;}
   function schedule(){if(readOnly)return;clearTimeout(timer);timer=setTimeout(()=>refresh(),600);}
   async function refresh(){
@@ -124,7 +127,7 @@ export function createThemes(h){
    d.append(sum,menu);return d;
   }
   function draw(){
-   panel.replaceChildren();panel.classList.toggle('has-settings',view.mode!=='tree');
+   panel.replaceChildren();inspector.replaceChildren();inspector.hidden=view.mode==='tree';layout.classList.toggle('with-settings',view.mode!=='tree');
    // Page picker (as in Shopify's editor): the home page or another storefront page.
    const pick=select([['home','Home page'],...PAGE_SLUGS.map(s=>[s,pages.template(content,s,false).title])],page);pick.setAttribute('aria-label','Page to edit');pick.classList.add('theme-page-select');
    pick.addEventListener('change',()=>{page=pick.value;view={mode:'tree'};draw();refresh();});
@@ -135,13 +138,13 @@ export function createThemes(h){
    tree.append(pages.tree(content,'header',view,choose,draw,{title:'Header',fixed:true}),pages.tree(content,page,view,choose,draw,{title:'Template'}),pages.tree(content,'footer',view,choose,draw,{title:'Footer',fixed:true}));
    if(view.mode==='lq-section'&&pages.template(content,view.tpl,false)?.sections[view.id]){const f=pages.sectionForm(content,view.tpl,view.id,draw);return drawCard(f.title,'section',f.body,readOnly||view.tpl!==page?null:[[f.hidden?'Show section':'Hide section',f.toggle],['Remove section',()=>{if(!confirmed('Remove this section from the page?'))return;f.remove();view={mode:'tree'};draw();}]]);}
    if(view.mode==='lq-page'&&page!=='home')return drawCard('Page title and text','gear',pages.pageForm(content,page),null);
-   view={mode:'tree'};panel.classList.remove('has-settings');
+   view={mode:'tree'};inspector.hidden=true;layout.classList.remove('with-settings');
   }
   function drawCard(title,iconName,body,menu){
    const card=el('div',undefined,'theme-settings-card'),head=el('div',undefined,'theme-settings-head');head.append(icon(iconName),el('h2',title,'theme-form-title'));
    if(menu)head.append(moreMenu(title,menu.map(([text,fn])=>[text,fn,false])));
    const close=button('×',()=>{view={mode:'tree'};draw();});close.classList.add('theme-close');close.setAttribute('aria-label','Close settings');head.append(close);
-   card.append(head,body);panel.append(card);
+   card.append(head,body);inspector.append(card);
   }
   function drawForm(title,fields,values,ctx,iconName){
    const card=el('div',undefined,'theme-settings-card'),head=el('div',undefined,'theme-settings-head');
@@ -149,7 +152,7 @@ export function createThemes(h){
    if(ctx&&!readOnly)head.append(moreMenu(title,[[ctx.s.hidden?'Show section':'Hide section',()=>{ctx.s.hidden=!ctx.s.hidden;touch();draw();},false],
     ...(ctx.group==='sections'?[['Remove section',()=>{if(!confirmed('Remove this section from the theme?'))return;ctx.list.splice(ctx.list.indexOf(ctx.s),1);touch();view={mode:'tree'};draw();},false]]:[])]));
    const close=button('×',()=>{view={mode:'tree'};draw();});close.classList.add('theme-close');close.setAttribute('aria-label','Close settings');head.append(close);
-   const form=el('div',undefined,'section-form theme-form');card.append(head,form);panel.append(card);
+   const form=el('div',undefined,'section-form theme-form');card.append(head,form);inspector.append(card);
    const redraw=()=>{form.replaceChildren(...fields.map(f=>control(values,f,redraw)));if(readOnly)for(const n of form.querySelectorAll('input,textarea,select,button'))n.disabled=true;};
    redraw();
   }

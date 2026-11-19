@@ -15,8 +15,16 @@ async function api(path,body,method=body?'POST':'GET'){
 function action(id,fn){$(id).addEventListener('click',async e=>{e.preventDefault();$(id).disabled=true;try{await fn();}catch(err){message(err.message);}finally{$(id).disabled=false;}});}
 function showQr(src){if(src){$('qr').src=src;$('qr').hidden=false;}else{$('qr').removeAttribute('src');$('qr').hidden=true;}}
 async function refresh(){if(adminUI)await adminUI.reload();}
+// Workspace notices appear as a short toast; the sign-in card keeps its own status line.
+let toastTimer;
+function toast(text){const t=$('toast');t.textContent=text;t.hidden=!text;clearTimeout(toastTimer);if(text)toastTimer=setTimeout(()=>{t.textContent='';t.hidden=true;},6000);}
 async function workspace(){
- const staff=await api('session');role=staff.role;$('workspace').hidden=false;$('mfa').hidden=true;$('upload').disabled=role==='viewer';$('file').disabled=role==='viewer';message('Signed in as '+role);if(!adminUI)adminUI=mountAdmin(api,role,message);await refresh();
+ const staff=await api('session');role=staff.role;$('workspace').hidden=false;$('auth').hidden=true;$('mfa').hidden=true;$('upload').disabled=role==='viewer';$('file').disabled=role==='viewer';message('Signed in as '+role);
+ const {session}=checkResult(await client.auth.getSession());
+ if(!adminUI)adminUI=mountAdmin(api,role,toast,{email:session?.user?.email??'',
+  signOut:async()=>{checkResult(await client.auth.signOut());message('Signed out.');},
+  changePassword:async()=>{const email=session?.user?.email;if(!email)throw Error('No email on this account.');checkResult(await client.auth.resetPasswordForEmail(email,{redirectTo:location.origin+'/admin'}));toast('A password reset email has been sent to '+email+'. Open the newest link in this browser.');}});
+ await refresh();
 }
 async function signedIn(){
  if(invitation||recovery)throw Error('Complete password setup first.');
@@ -32,7 +40,7 @@ try{
  client.auth.onAuthStateChange(event=>{
   // Supabase also relays other tabs' events. Only this tab's own code exchange opens recovery here.
   if(event==='PASSWORD_RECOVERY'&&!exchanging){if(!recovery)message('Password recovery is open in another tab.');return;}
-  if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;enrollment=null;enrolling=null;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';showQr(null);$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
+  if(event==='PASSWORD_RECOVERY'){recovery=true;$('workspace').hidden=true;$('auth').hidden=false;$('mfa').hidden=true;$('recovery').hidden=false;$('login').hidden=true;message('Choose a new password.');}if(event==='SIGNED_OUT'){adminUI?.destroy();adminUI=null;factor=null;role=null;recovery=false;enrollment=null;enrolling=null;invitation=false;$('invitation').hidden=true;$('invite-password').value='';$('invite-confirm').value='';$('new-password').value='';showQr(null);$('code').value='';$('recovery').hidden=true;$('workspace').hidden=true;$('auth').hidden=false;$('mfa').hidden=true;$('logout').hidden=true;$('login').hidden=false;}});
  $('login').onsubmit=async e=>{e.preventDefault();try{checkResult(await client.auth.signInWithPassword({email:$('email').value,password:$('password').value}));$('password').value='';await signedIn();}catch(err){message(err.message);}};
  action('reset',async()=>{checkResult(await client.auth.resetPasswordForEmail($('email').value,{redirectTo:location.origin+'/admin'}));message('If eligible, a recovery email has been sent. Open the newest link in this browser.');});
  action('update-password',async()=>{if(!recovery)throw Error('Open a valid password recovery link first.');await recoverPassword(client.auth,$('new-password').value);$('new-password').value='';$('recovery').hidden=true;message('Password updated. Sign in again.');});

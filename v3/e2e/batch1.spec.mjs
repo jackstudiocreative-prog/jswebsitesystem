@@ -81,7 +81,7 @@ test('home: "no published theme" and "could not load" are different messages',as
 test('admin: dashboard tasks open the matching filtered lists; engraving and collection order are editable',async({page})=>{
  const g=guard(page);
  await page.route('**/api/v3/media/previews*',r=>r.fulfill({status:200,contentType:'application/json',body:'{}'}));
- await page.goto('/admin');await expect(page.getByText('Signed in as editor')).toBeVisible();
+ await page.goto('/admin');await expect(page.getByRole('button',{name:'editor@e2e.test'})).toBeVisible();
  const tasks=page.locator('.dashboard-tasks');
  const out=tasks.locator('.task-row',{hasText:'Variants out of stock'});
  if(await out.count()){const n=Number(await out.locator('strong').textContent());await out.getByRole('button').click();

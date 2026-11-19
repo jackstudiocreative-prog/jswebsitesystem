@@ -3,7 +3,7 @@
 import {mountAdmin} from '../admin/catalog-ui.mjs';
 const role=new URLSearchParams(location.search).get('role')??'editor';
 const api=async(path,body,method=body?'POST':'GET')=>{const r=await fetch('/api/v3/'+path,{method,headers:{Authorization:'Bearer '+role,...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});const d=await r.json();if(!r.ok)throw Error(d.error);return d;};
-for(const id of ['login','reset'])document.getElementById(id).hidden=true;
+document.getElementById('auth').hidden=true;
 document.getElementById('workspace').hidden=false;
-const message=t=>{document.getElementById('message').textContent=t;};message('Signed in as '+role);
-mountAdmin(api,role,message).reload();
+const toast=t=>{const n=document.getElementById('toast');n.textContent=t;n.hidden=!t;};
+mountAdmin(api,role,toast,{email:role+'@e2e.test',signOut:async()=>{toast('Signed out (test)');},changePassword:async()=>{toast('A password reset email has been sent to '+role+'@e2e.test.');}}).reload();
