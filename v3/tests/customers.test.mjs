@@ -11,13 +11,13 @@ import {CUSTOMER_HEADERS} from '../shared/customer-columns.mjs';
 
 const SECRET='c'.repeat(40);
 async function harness(){
- const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
+ const db=new PGlite();let count=0;const sql={get count(){return count;},query:(q,args)=>(count++,0)||q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  await migrate(sql);await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");await db.query('SET ROLE jackstudio_api');
  const gateway=testGateway({provider:'mock',serviceId:'JSMOCK',password:SECRET,actionUrl:'https://pay.test',baseUrl:'https://shop.test'});
  const server=createServer(handler({connect:async()=>({...sql,release(){}})},async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false}));
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port+'/api/v3/';
  const request=async(path,method='GET',body,token='editor')=>{const headers={'Content-Type':'application/json'};if(token)headers.Authorization='Bearer '+token;const r=await fetch(base+path,{method,headers,...(body?{body:JSON.stringify(body)}:{})});const t=await r.text();let j;try{j=JSON.parse(t);}catch{j=t;}return {status:r.status,body:j};};
- return {db,request,base,close:async()=>{await new Promise(r=>server.close(r));await db.close();}};
+ return {db,sql,request,base,close:async()=>{await new Promise(r=>server.close(r));await db.close();}};
 }
 // Shape of Shopify's export (apostrophe-prefixed IDs/phones, yes/no consent, quoted fields).
 const CSV=`﻿Customer ID,First Name,Last Name,Email,Accepts Email Marketing,Default Address Company,Default Address Address1,Default Address Address2,Default Address City,Default Address Province Code,Default Address Country Code,Default Address Zip,Default Address Phone,Phone,Accepts SMS Marketing,Total Spent,Total Orders,Note,Tax Exempt,Tags\r
@@ -81,5 +81,18 @@ test('customer list: imported + ordered here, matched by email for staff; filter
   assert.equal((await h.request('customers?sort=bogus')).status,400);
   const d=(await h.request('customers/'+a.id,'GET',undefined,'viewer')).body;assert.equal(d.orders.length,1);assert.equal(d.shopify_customer_id,'7002');
   assert.equal((await h.request('customers/999')).status,404);assert.equal((await h.request('customers/1','POST',{})).status,405);
+ }finally{await h.close();}
+});
+
+test('a full batch takes a fixed, small number of database queries (fits the 30-second limit); duplicates in a file are reported',async()=>{
+ const h=await harness();
+ try{
+  const rows=Array.from({length:400},(_,i)=>({'Customer ID':String(9000+i),'First Name':'C'+i,'Email':`c${i}@example.com`,'Accepts Email Marketing':i%7?'no':'yes','Total Spent':'1.00','Total Orders':'1'}));
+  let before=h.sql.count;let res=await h.request('customers/import','POST',{rows});let r=res.body;assert.equal(r.created,400,JSON.stringify(res));
+  assert.ok(h.sql.count-before<=15,`queries for 400 new rows: ${h.sql.count-before}`);
+  rows[3]={...rows[3],'First Name':'Changed'};before=h.sql.count;r=(await h.request('customers/import','POST',{rows})).body;
+  assert.deepEqual([r.created,r.updated,r.unchanged],[0,1,399]);assert.ok(h.sql.count-before<=15);
+  r=(await h.request('customers/import','POST',{rows:[{Email:'dup@example.com','First Name':'A'},{Email:'DUP@example.com','First Name':'B'}],first_line:10})).body;
+  assert.equal(r.created,1);assert.deepEqual(r.skipped,[{line:11,reason:'Same customer as line 10'}]);
  }finally{await h.close();}
 });
