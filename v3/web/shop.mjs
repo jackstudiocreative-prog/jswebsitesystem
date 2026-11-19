@@ -5,7 +5,10 @@ import {bag,setBag,updateBadges} from './bag.mjs';
 import {siteData,mountSite} from './liquid-site.mjs';
 import './image-fallback.mjs';
 import {richText,plainText} from './rich-text.mjs';
-const ORDERS='js-orders',ATTEMPT='js-checkout-attempt';
+const ORDERS='js-orders',ATTEMPT='js-checkout-attempt',CODE='js-discount-code';
+// The discount code the customer typed. Only the code is kept here; the server decides what it is worth.
+const savedCode=()=>{try{return localStorage.getItem(CODE)||'';}catch{return '';}};
+const saveCode=v=>{try{v?localStorage.setItem(CODE,v):localStorage.removeItem(CODE);}catch{}};
 const price=n=>new Intl.NumberFormat('en-MY',{style:'currency',currency:'MYR'}).format((n??0)/100);
 const read=(store,k,f)=>{try{return JSON.parse(store.getItem(k))??f;}catch{return f;}};
 const write=(store,k,v)=>{try{store.setItem(k,JSON.stringify(v));}catch{}};
@@ -144,19 +147,33 @@ function notFound(title='Page not found',text='This page does not exist or has m
 }
 async function cart(){
  const items=bag();if(!items.length)return page('Your bag',h('h1',{},'Your bag'),h('p',{},'Your bag is empty.'),h('a',{href:'/collections/all',class:'store-button'},'Continue shopping'));
- let q;try{q=await api('cart',{lines:items});}catch(e){return page('Your bag',h('h1',{},'Your bag'),notice(e.message,'error'),h('button',{class:'store-button',onclick:()=>{setBag([]);cart();}},'Clear bag'));}
+ let q;try{q=await api('cart',{lines:items,discount_code:savedCode()});}catch(e){return page('Your bag',h('h1',{},'Your bag'),notice(e.message,'error'),h('button',{class:'store-button',onclick:()=>{setBag([]);cart();}},'Clear bag'));}
+ // A code that no longer applies is dropped, with the reason shown once.
+ const codeNote=q.discount_error&&savedCode()?q.discount_error:null;if(q.discount_error)saveCode('');
  // The server's lines are the record (engraving normalised, identical lines merged); the bag follows them.
  setBag(q.lines.map(l=>({variant_id:l.variant_id,quantity:l.quantity,...(l.engraving?{engraving:l.engraving}:{})})));
  const same=l=>i=>i.variant_id===l.variant_id&&(i.engraving??'')===(l.engraving??'');
  const rows=q.lines.map(l=>{const qty=h('input',{type:'number',min:'1',max:'20',value:String(l.quantity),inputmode:'numeric','aria-label':`Quantity for ${l.title||'item'}${l.engraving?' engraved '+l.engraving:''}`,onchange:e=>{const n=Math.max(1,Math.min(20,Number(e.target.value)||1));setBag(bag().map(i=>same(l)(i)?{...i,quantity:n}:i));cart();}});
   return h('div',{class:'js-line'+(l.available===false?' is-unavailable':'')},h('div',{class:'js-line-product'},l.handle?h('a',{href:'/products/'+l.handle,tabindex:'-1','aria-hidden':'true'},picture(l.image,{cls:'js-line-image',sizes:'72px'})):picture(null,{cls:'js-line-image'}),h('div',{},l.handle?h('a',{href:'/products/'+l.handle,class:'js-line-title'},h('strong',{},l.title)):h('strong',{},'Unavailable item'),l.variant_title?h('small',{},l.variant_title):null,l.engraving?h('small',{class:'js-engraving'},`${l.engraving_label||'Engraving'}: ${l.engraving}`):null,l.engraving_error?h('small',{class:'js-warn'},l.engraving_error+' Remove this item and add it again from the product page.'):l.available===false?h('small',{class:'js-warn'},l.title?'Not enough stock for this quantity':'No longer available'):l.low?h('small',{},'Only a few left'):null)),l.title?h('span',{},price(l.unit_price_minor)):h('span'),qty,h('span',{},l.title?price(l.line_total_minor):'—'),h('button',{type:'button',class:'js-link','aria-label':`Remove ${l.title||'item'}${l.engraving?' engraved '+l.engraving:''}`,onclick:()=>{setBag(bag().filter(i=>!same(l)(i)));cart();}},'Remove'));});
  const blocked=q.lines.some(l=>l.available===false)||q.shipping_error;
- page('Your bag',h('h1',{},'Your bag'),h('div',{class:'js-lines'},...rows),summary(q),policyLinks(),blocked?notice(q.shipping_error||'Update your bag to continue.','error'):null,h('div',{class:'js-actions'},h('a',{href:'/collections/all',class:'js-link'},'Continue shopping'),h('a',{href:blocked?'#':'/checkout',class:'store-button','aria-disabled':blocked?'true':false,onclick:e=>{if(blocked)e.preventDefault();}},'Checkout')));
+ page('Your bag',h('h1',{},'Your bag'),h('div',{class:'js-lines'},...rows),summary(q),codeForm(q,codeNote),policyLinks(),blocked?notice(q.shipping_error||'Update your bag to continue.','error'):null,h('div',{class:'js-actions'},h('a',{href:'/collections/all',class:'js-link'},'Continue shopping'),h('a',{href:blocked?'#':'/checkout',class:'store-button','aria-disabled':blocked?'true':false,onclick:e=>{if(blocked)e.preventDefault();}},'Checkout')));
 }
-function summary(q){return h('dl',{class:'js-summary'},h('dt',{},'Subtotal'),h('dd',{},price(q.subtotal_minor)),h('dt',{},'Shipping'),h('dd',{},q.shipping_minor==null?'—':q.shipping_minor?price(q.shipping_minor):'Free'),...(q.shipping_names?.length?[h('dt',{class:'js-ship-name'},''),h('dd',{class:'js-ship-name'},q.shipping_names.join(' · '))]:[]),h('dt',{class:'js-total'},'Total'),h('dd',{class:'js-total'},q.total_minor==null?'—':price(q.total_minor)));}
+function summary(q){return h('dl',{class:'js-summary'},h('dt',{},'Subtotal'),h('dd',{},price(q.subtotal_minor)),h('dt',{},'Shipping'),h('dd',{},q.shipping_minor==null?'—':q.shipping_minor?price(q.shipping_minor):'Free'),...(q.shipping_names?.length?[h('dt',{class:'js-ship-name'},''),h('dd',{class:'js-ship-name'},q.shipping_names.join(' · '))]:[]),...(q.discounts??[]).flatMap(d=>[h('dt',{class:'js-discount'},d.code?`Discount (${d.code})`:d.title),h('dd',{class:'js-discount'},'−'+price(d.amount_minor))]),...(!q.discounts&&q.discount_minor?[h('dt',{class:'js-discount'},'Discount'),h('dd',{class:'js-discount'},'−'+price(q.discount_minor))]:[]),h('dt',{class:'js-total'},'Total'),h('dd',{class:'js-total'},q.total_minor==null?'—':price(q.total_minor)));}
+function codeForm(q,note){
+ const applied=(q.discounts??[]).find(d=>d.code);
+ if(applied)return h('div',{class:'js-code'},h('p',{class:'js-code-applied'},h('span',{},`Code ${applied.code} applied · ${applied.title}`),h('button',{type:'button',class:'js-link',onclick:()=>{saveCode('');cart();}},'Remove code')));
+ const input=h('input',{name:'discount_code',autocomplete:'off',autocapitalize:'characters',maxlength:'32',spellcheck:'false'});
+ const msg=h('p',{class:'js-code-msg',role:'status'},note?notice(note,'error'):'');
+ const form=h('form',{class:'js-code',onsubmit:async e=>{e.preventDefault();const code=input.value.trim();if(!code)return;const b=form.querySelector('button');b.disabled=true;
+  try{const r=await api('cart',{lines:bag(),discount_code:code});if(r.discount_error){msg.replaceChildren(notice(r.discount_error,'error'));b.disabled=false;return;}saveCode(r.discount_code);cart();}
+  catch(err){msg.replaceChildren(notice(err.message,'error'));b.disabled=false;}}},
+  h('label',{},'Discount code',h('span',{class:'js-code-row'},input,h('button',{type:'submit',class:'store-button store-button--secondary'},'Apply'))),msg);
+ return form;
+}
 async function checkout(){
  const items=bag();if(!items.length){location.replace('/cart');return;}
- let q;try{q=await api('cart',{lines:items});}catch(e){return page('Checkout',notice(e.message,'error'));}
+ let q;try{q=await api('cart',{lines:items,discount_code:savedCode()});}catch(e){return page('Checkout',notice(e.message,'error'));}
+ if(q.discount_error&&savedCode()){saveCode('');location.replace('/cart');return;}
  if(q.lines.some(l=>l.available===false)||q.shipping_error){location.replace('/cart');return;}
  const field=(label,name,attrs={})=>h('label',{},label,h('input',{name,required:true,...attrs}));
  const form=h('form',{class:'js-form'},
@@ -170,9 +187,9 @@ async function checkout(){
   h('button',{class:'store-button',type:'submit'},`Pay ${price(q.total_minor)}`),h('div',{id:'checkout-msg'}));
  form.addEventListener('submit',async e=>{e.preventDefault();const button=form.querySelector('button[type=submit]'),msg=form.querySelector('#checkout-msg');button.disabled=true;msg.replaceChildren(notice('Holding your items…'));
   // One attempt id per bag, so a double click or a retry after a network error never creates two orders.
-  const sig=JSON.stringify(items);let attempt=read(sessionStorage,ATTEMPT,null);if(!attempt||attempt.sig!==sig){attempt={sig,key:crypto.randomUUID(),token:random()};write(sessionStorage,ATTEMPT,attempt);}
+  const sig=JSON.stringify([items,savedCode()]);let attempt=read(sessionStorage,ATTEMPT,null);if(!attempt||attempt.sig!==sig){attempt={sig,key:crypto.randomUUID(),token:random()};write(sessionStorage,ATTEMPT,attempt);}
   const customer=Object.fromEntries(new FormData(form));
-  try{const r=await api('checkout',{idempotency_key:attempt.key,access_token:attempt.token,customer,lines:items});const orders=read(localStorage,ORDERS,{});orders[r.order.number]=attempt.token;write(localStorage,ORDERS,orders);setBag([]);sessionStorage.removeItem(ATTEMPT);msg.replaceChildren(notice('Taking you to secure payment…'));pay(r.payment,r.order.number);}
+  try{const r=await api('checkout',{idempotency_key:attempt.key,access_token:attempt.token,customer,lines:items,discount_code:savedCode()});const orders=read(localStorage,ORDERS,{});orders[r.order.number]=attempt.token;write(localStorage,ORDERS,orders);setBag([]);saveCode('');sessionStorage.removeItem(ATTEMPT);msg.replaceChildren(notice('Taking you to secure payment…'));pay(r.payment,r.order.number);}
   catch(err){msg.replaceChildren(notice(err.message,'error'));button.disabled=false;if(err.status===409)sessionStorage.removeItem(ATTEMPT);}
  });
  page('Checkout',h('h1',{},'Checkout'),h('div',{class:'js-checkout'},form,h('aside',{class:'js-aside'},h('h2',{},'Order summary'),...q.lines.map(l=>h('p',{class:'js-mini'},`${l.quantity} × ${l.title}${l.variant_title?' · '+l.variant_title:''}${l.engraving?' · Engraving: '+l.engraving:''}`,h('span',{},price(l.line_total_minor)))),summary(q))));
