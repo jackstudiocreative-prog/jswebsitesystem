@@ -45,31 +45,44 @@ export function parseRow(row){
 }
 const FIELDS=['shopify_customer_id','email','first_name','last_name','phone','company','address1','address2','city','province_code','zip','country_code','accepts_email_marketing','accepts_sms_marketing','tags','note','shopify_orders','shopify_spent_minor'];
 
+// A fixed number of queries per batch (read existing, insert new, update changed), so a batch of a
+// few hundred rows finishes well inside the 30-second function limit even far from the database.
 export async function importCustomers(db,input,actor){
  if(!await ready(db))throw new HttpError(503,MIGRATION_014);
  const rows=input?.rows;if(!Array.isArray(rows)||!rows.length||rows.length>MAX_ROWS)bad(`Send 1–${MAX_ROWS} rows at a time`);
  const first=Number.isInteger(input.first_line)&&input.first_line>0?input.first_line:2;
- let created=0,updated=0,unchanged=0;const skipped=[];
+ const skipped=[],parsed=[],seenId=new Map(),seenEmail=new Map();
  for(const [i,row] of rows.entries()){
-  const {record,error}=parseRow(row);const line=first+i;
+  const line=first+i,{record,error}=parseRow(row);
   if(error){skipped.push({line,reason:error});continue;}
-  let old=record.shopify_customer_id?(await db.query('SELECT * FROM customers WHERE shopify_customer_id=$1 FOR UPDATE',[record.shopify_customer_id])).rows[0]:null;
-  if(!old&&record.email)old=(await db.query('SELECT * FROM customers WHERE email=$1 FOR UPDATE',[record.email])).rows[0];
-  if(old&&record.email&&old.email!==record.email&&(await db.query('SELECT 1 FROM customers WHERE email=$1 AND id<>$2',[record.email,old.id])).rows.length){skipped.push({line,reason:`Email ${record.email} already belongs to another customer`});continue;}
-  if(old&&old.shopify_customer_id&&record.shopify_customer_id&&String(old.shopify_customer_id)!==record.shopify_customer_id){skipped.push({line,reason:`Email ${record.email} belongs to another Shopify customer`});continue;}
-  const vals=FIELDS.map(f=>record[f]);
-  if(old){
-   const norm=(f,v)=>f==='shopify_customer_id'?String(v??''):f==='shopify_spent_minor'||f==='shopify_orders'?Number(v):v;
-   const same=FIELDS.every(f=>JSON.stringify(norm(f,old[f]))===JSON.stringify(norm(f,record[f])));
-   if(same){unchanged++;continue;}
-   const consentChanged=old.accepts_email_marketing!==record.accepts_email_marketing||old.accepts_sms_marketing!==record.accepts_sms_marketing;
-   await db.query(`UPDATE customers SET ${FIELDS.map((f,j)=>`${f}=$${j+2}`).join(',')},imported_at=now(),updated_at=now()${consentChanged?",consent_source='Shopify customer export',consent_recorded_at=now()":''} WHERE id=$1`,[old.id,...vals]);updated++;
-  }else{
-   await db.query(`INSERT INTO customers(${FIELDS.join(',')},source,consent_source,consent_recorded_at,imported_at) VALUES (${FIELDS.map((_,j)=>'$'+(j+1)).join(',')},'shopify','Shopify customer export',now(),now())`,vals);created++;
-  }
+  const dup=(record.shopify_customer_id&&seenId.get(record.shopify_customer_id))||(record.email&&seenEmail.get(record.email));
+  if(dup){skipped.push({line,reason:`Same customer as line ${dup}`});continue;}
+  if(record.shopify_customer_id)seenId.set(record.shopify_customer_id,line);if(record.email)seenEmail.set(record.email,line);
+  parsed.push({line,record});
  }
- await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,'import','customers',$2)",[actor,created+updated]);
- return {created,updated,unchanged,skipped};
+ const ids=parsed.map(p=>p.record.shopify_customer_id).filter(Boolean),emails=parsed.map(p=>p.record.email).filter(Boolean);
+ const existing=(await db.query('SELECT * FROM customers WHERE shopify_customer_id=ANY($1::bigint[]) OR email=ANY($2::text[]) ORDER BY id FOR UPDATE',[ids,emails])).rows;
+ const byId=new Map(existing.filter(c=>c.shopify_customer_id!=null).map(c=>[String(c.shopify_customer_id),c])),byEmail=new Map(existing.filter(c=>c.email).map(c=>[c.email,c]));
+ const norm=(f,v)=>f==='shopify_customer_id'?String(v??''):f==='shopify_spent_minor'||f==='shopify_orders'?Number(v):v;
+ const inserts=[],updates=[];let unchanged=0;
+ for(const {line,record} of parsed){
+  let old=record.shopify_customer_id?byId.get(record.shopify_customer_id):null;
+  if(!old&&record.email)old=byEmail.get(record.email);
+  if(old&&record.email&&old.email!==record.email){const other=byEmail.get(record.email);if(other&&other.id!==old.id){skipped.push({line,reason:`Email ${record.email} already belongs to another customer`});continue;}}
+  if(old&&old.shopify_customer_id!=null&&record.shopify_customer_id&&String(old.shopify_customer_id)!==record.shopify_customer_id){skipped.push({line,reason:`Email ${record.email} belongs to another Shopify customer`});continue;}
+  if(!old){inserts.push(record);continue;}
+  if(FIELDS.every(f=>JSON.stringify(norm(f,old[f]))===JSON.stringify(norm(f,record[f])))){unchanged++;continue;}
+  updates.push({...record,id:String(old.id),consent_changed:old.accepts_email_marketing!==record.accepts_email_marketing||old.accepts_sms_marketing!==record.accepts_sms_marketing});
+ }
+ const cols=`shopify_customer_id bigint,email text,first_name text,last_name text,phone text,company text,address1 text,address2 text,city text,province_code text,zip text,country_code text,accepts_email_marketing boolean,accepts_sms_marketing boolean,tags text[],note text,shopify_orders integer,shopify_spent_minor bigint`;
+ if(inserts.length)await db.query(`INSERT INTO customers(${FIELDS.join(',')},source,consent_source,consent_recorded_at,imported_at)
+  SELECT ${FIELDS.join(',')},'shopify','Shopify customer export',now(),now() FROM jsonb_to_recordset($1::jsonb) AS r(${cols})`,[JSON.stringify(inserts)]);
+ if(updates.length)await db.query(`UPDATE customers c SET ${FIELDS.map(f=>`${f}=r.${f}`).join(',')},imported_at=now(),updated_at=now(),
+  consent_source=CASE WHEN r.consent_changed THEN 'Shopify customer export' ELSE c.consent_source END,consent_recorded_at=CASE WHEN r.consent_changed THEN now() ELSE c.consent_recorded_at END
+  FROM jsonb_to_recordset($1::jsonb) AS r(id bigint,consent_changed boolean,${cols}) WHERE c.id=r.id`,[JSON.stringify(updates)]);
+ if(inserts.length+updates.length)await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,'import','customers',$2)",[actor,inserts.length+updates.length]);
+ skipped.sort((x,y)=>x.line-y.line);
+ return {created:inserts.length,updated:updates.length,unchanged,skipped};
 }
 
 // Combined list: imported records (with this store's paid orders matched by email, for staff only)
