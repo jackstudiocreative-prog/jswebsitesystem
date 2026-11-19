@@ -4,12 +4,18 @@
 // fields are never returned.
 import {HttpError} from './auth.mjs';
 import {publicImage} from './media-urls.mjs';
+import {CHARSETS} from '../shared/personalization.mjs';
 
 const HANDLE=/^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const LISTED=`p.status='active' AND EXISTS(SELECT 1 FROM product_collections pc JOIN collections c ON c.id=pc.collection_id WHERE pc.product_id=p.id AND c.status='active')`;
 export const PAGE_SIZE=24;
+// "featured": the collection's manual order (staff arrangement or Shopify's collection order, migration 011);
+// for all products: in stock first, then each product's best place in its collections. "newest": most
+// recently added to this catalogue.
+const FEATURED_IN=`(SELECT (to_jsonb(pc)->>'position')::int FROM product_collections pc WHERE pc.product_id=p.id AND pc.collection_id=$1),p.id DESC`;
+const FEATURED_ALL=`p.available DESC,(SELECT min((to_jsonb(pc)->>'position')::int) FROM product_collections pc JOIN collections c ON c.id=pc.collection_id AND c.status='active' WHERE pc.product_id=p.id),p.id DESC`;
 const SORTS={
- featured:'p.id DESC',
+ featured:null,
  newest:'p.id DESC',
  'title-asc':'p.title ASC,p.id',
  'title-desc':'p.title DESC,p.id',
@@ -22,7 +28,8 @@ const LOW_STOCK=5;
 const CARD=`SELECT p.id,p.title,p.handle,p.featured_media_id,
   coalesce((SELECT min(v.price_minor) FROM product_variants v WHERE v.product_id=p.id AND v.active),p.price_minor) AS price_min,
   coalesce((SELECT max(v.price_minor) FROM product_variants v WHERE v.product_id=p.id AND v.active),p.price_minor) AS price_max,
-  (SELECT max((to_jsonb(v)->>'compare_at_minor')::int) FROM product_variants v WHERE v.product_id=p.id AND v.active) AS compare_at,
+  -- Compare-at of the cheapest variant, so "was" and "now" always describe the same variant.
+  (SELECT (to_jsonb(v)->>'compare_at_minor')::int FROM product_variants v WHERE v.product_id=p.id AND v.active ORDER BY v.price_minor,v.position,v.id LIMIT 1) AS compare_at,
   coalesce((SELECT sum(v.inventory) FROM product_variants v WHERE v.product_id=p.id AND v.active),0)>0 AS available,
   (SELECT pm.media_id FROM product_media pm WHERE pm.product_id=p.id ORDER BY pm.position LIMIT 1) AS first_media_id
  FROM products p`;
@@ -58,13 +65,14 @@ export async function storefrontCollection(db,handle,params=new URLSearchParams(
  }
  if(inStock)where=(where?where+' AND ':'')+'EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND v.inventory>0)';
  const total=(await db.query(`SELECT count(*)::int AS n FROM products p WHERE ${LISTED}${where?' AND '+where:''}`,args)).rows[0].n;
- const products=await productCards(db,where,args,{order:SORTS[sort],offset:(page-1)*PAGE_SIZE});
+ const order=SORTS[sort]??(handle==='all'?FEATURED_ALL:FEATURED_IN);
+ const products=await productCards(db,where,args,{order,offset:(page-1)*PAGE_SIZE});
  return {collection,products,total,page,pages:Math.max(1,Math.ceil(total/PAGE_SIZE)),sort,available_only:inStock};
 }
 
 export async function storefrontProduct(db,handle){
  if(!HANDLE.test(handle)||handle.length>100)throw new HttpError(404,'Product not found');
- const p=(await db.query(`SELECT p.id,p.title,p.handle,p.description,p.option_names,p.shipping_profile,p.featured_media_id FROM products p WHERE p.handle=$1 AND ${LISTED}`,[handle])).rows[0];
+ const p=(await db.query(`SELECT p.id,p.title,p.handle,p.description,p.option_names,p.shipping_profile,p.featured_media_id,to_jsonb(p)->'personalization' AS personalization FROM products p WHERE p.handle=$1 AND ${LISTED}`,[handle])).rows[0];
  if(!p)throw new HttpError(404,'Product not found');
  const variants=(await db.query("SELECT id,option_values,price_minor,inventory,media_id,(to_jsonb(v)->>'compare_at_minor')::int AS compare_at FROM product_variants v WHERE product_id=$1 AND active ORDER BY position,id",[p.id])).rows;
  const gallery=(await db.query('SELECT media_id FROM product_media WHERE product_id=$1 ORDER BY position',[p.id])).rows.map(r=>String(r.media_id));
@@ -72,8 +80,9 @@ export async function storefrontProduct(db,handle){
  const media=await mediaRows(db,order);
  const images=order.map(id=>publicImage(media.get(id),p.title)).filter(Boolean);
  const collections=(await db.query("SELECT c.title,c.slug FROM collections c JOIN product_collections pc ON pc.collection_id=c.id WHERE pc.product_id=$1 AND c.status='active' ORDER BY c.position,c.id",[p.id])).rows.map(c=>({title:c.title,handle:c.slug}));
- const {featured_media_id,...rest}=p;
- return {product:{...rest,id:String(p.id),images,collections,
+ const {featured_media_id,personalization,...rest}=p;
+ const engraving=personalization?.enabled?{label:personalization.label,required:personalization.required,max_length:personalization.max_length,charset:personalization.charset,rule:CHARSETS[personalization.charset]?.label??'',help:personalization.help??'',variant_ids:personalization.variant_ids??[]}:null;
+ return {product:{...rest,id:String(p.id),images,collections,engraving,
   variants:variants.map(v=>({id:String(v.id),option_values:v.option_values,price_minor:v.price_minor,compare_at_minor:v.compare_at!=null&&v.compare_at>v.price_minor?v.compare_at:null,available:v.inventory>0,low:v.inventory>0&&v.inventory<=LOW_STOCK,image_id:v.media_id&&media.has(String(v.media_id))?String(v.media_id):null}))},
   checkoutAvailable:true};
 }

@@ -1,10 +1,11 @@
 // The customer's bag: variant IDs and quantities in this browser only. Prices, stock and totals always
 // come from the server (/api/v3/storefront/cart).
 export const BAG='js-bag',MAX_QTY=20,MAX_LINES=50;
-const read=()=>{try{const v=JSON.parse(localStorage.getItem(BAG));return Array.isArray(v)?v.filter(i=>i&&/^[1-9]\d{0,17}$/.test(String(i.variant_id))&&Number.isInteger(i.quantity)&&i.quantity>0):[];}catch{return [];}};
+// A line is a variant plus (optionally) its engraving text.
+const read=()=>{try{const v=JSON.parse(localStorage.getItem(BAG));return Array.isArray(v)?v.filter(i=>i&&/^[1-9]\d{0,17}$/.test(String(i.variant_id))&&Number.isInteger(i.quantity)&&i.quantity>0&&(i.engraving==null||typeof i.engraving==='string'&&i.engraving.length<=80)):[];}catch{return [];}};
 export const bag=()=>read();
 export function setBag(items){
- const clean=items.filter(i=>i.quantity>0).slice(0,MAX_LINES).map(i=>({variant_id:String(i.variant_id),quantity:Math.min(MAX_QTY,i.quantity)}));
+ const clean=items.filter(i=>i.quantity>0).slice(0,MAX_LINES).map(i=>({variant_id:String(i.variant_id),quantity:Math.min(MAX_QTY,i.quantity),...(i.engraving?{engraving:String(i.engraving)}:{})}));
  try{localStorage.setItem(BAG,JSON.stringify(clean));}catch{}
  updateBadges();return clean;
 }

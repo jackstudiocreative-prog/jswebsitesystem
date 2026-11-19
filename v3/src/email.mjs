@@ -3,7 +3,7 @@
 // Sending is not enabled yet: when an email provider is chosen, a sender reads 'pending' rows.
 const money=n=>new Intl.NumberFormat('en-MY',{style:'currency',currency:'MYR'}).format(n/100);
 function render(kind,order,lines,extra={}){
- const items=lines.map(l=>`- ${l.quantity} × ${l.title}${l.variant_title?' ('+l.variant_title+')':''}  ${money(l.line_total_minor)}`).join('\n');
+ const items=lines.map(l=>`- ${l.quantity} × ${l.title}${l.variant_title?' ('+l.variant_title+')':''}${l.personalization?' · Engraving: '+l.personalization:''}  ${money(l.line_total_minor)}`).join('\n');
  const totals=`Subtotal: ${money(order.subtotal_minor)}\nShipping: ${order.shipping_minor?money(order.shipping_minor):'Free'}\nTotal: ${money(order.total_minor)}`;
  const address=[order.customer_name,order.address_line1,order.address_line2,`${order.postcode} ${order.city}`,`${order.state}, Malaysia`].filter(Boolean).join('\n');
  const sign='\n\nThank you for choosing Jack Studio.\nFrom everyday essentials to every journey.';

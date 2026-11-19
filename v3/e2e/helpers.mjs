@@ -36,6 +36,8 @@ export async function seed(request){
  const existing=await call('products?paged=true&q=E2E',undefined,'GET');
  if(existing.total)return;
  const c=await call('collections',{title:'E2E Wallets',status:'active'});
+ // Imported-style HTML description (with markup that must not run or show as text) and required engraving.
+ await call('products',{title:'E2E Engraved Wallet With A Deliberately Long Product Name For Layout Checks',handle:'e2e-engraved-wallet',status:'active',description:'<div><p>Slim wallet.<br>Hand-stitched.</p><h5>Engrave limitation</h5><ul><li>Max 5 letters</li></ul><p><img src="javascript:alert(1)" onerror="alert(2)"></p><script>window.__pwned=1</script><p>Supercalifragilisticexpialidociousleatherwordwithoutanyspaces</p></div>',collection_ids:[String(c.id)],option_names:['Color'],personalization:{enabled:true,required:true,label:'Engraving',max_length:5,charset:'upper_alnum',help:'Free engraving.'},variants:[{option_values:['Brown'],sku:'E2E-EW-BRN',price_minor:9900,inventory:40},{option_values:['Black'],sku:'E2E-EW-BLK',price_minor:9900,inventory:40}]});
  await call('products',{title:'E2E Card Holder',status:'active',description:'Full-grain leather with four card slots.',collection_ids:[String(c.id)],option_names:['Color'],media:[{media_id:'1',alt:'Brown card holder'}],variants:[{option_values:['Brown'],sku:'E2E-CH-BRN',price_minor:12900,inventory:40,media_id:'1'},{option_values:['Black'],sku:'E2E-CH-BLK',price_minor:12900,inventory:40}]});
  await call('products',{title:'E2E Weekender',status:'active',collection_ids:[String(c.id)],sku:'E2E-WK',price_minor:69900,inventory:20,shipping_profile:'luggage',weight_grams:2500});
 }

@@ -6,7 +6,7 @@ const json=(body,status=200)=>new Response(JSON.stringify(body),{status,headers:
 async function cart(){
  const items=bag();if(!items.length)return {token:'',item_count:0,items:[],total_price:0,original_total_price:0,items_subtotal_price:0,currency:'MYR',requires_shipping:true};
  const q=await quote(items);
- const lines=q.lines.filter(l=>l.title).map((l,i)=>({key:l.variant_id,id:Number(l.variant_id),variant_id:Number(l.variant_id),product_id:Number(l.product_id),quantity:l.quantity,title:l.variant_title?`${l.title} - ${l.variant_title}`:l.title,product_title:l.title,variant_title:l.variant_title||null,handle:l.handle,url:'/products/'+l.handle,price:l.unit_price_minor,final_price:l.unit_price_minor,line_price:l.line_total_minor,final_line_price:l.line_total_minor,original_line_price:l.line_total_minor,image:l.image?.url??null,featured_image:l.image?{url:l.image.url,alt:l.image.alt}:null,available:l.available!==false,index:i+1}));
+ const lines=q.lines.filter(l=>l.title).map((l,i)=>({key:l.variant_id,id:Number(l.variant_id),variant_id:Number(l.variant_id),product_id:Number(l.product_id),quantity:l.quantity,title:(l.variant_title?`${l.title} - ${l.variant_title}`:l.title)+(l.engraving?` (${l.engraving_label||'Engraving'}: ${l.engraving})`:''),product_title:l.title,variant_title:l.variant_title||null,handle:l.handle,url:'/products/'+l.handle,price:l.unit_price_minor,final_price:l.unit_price_minor,line_price:l.line_total_minor,final_line_price:l.line_total_minor,original_line_price:l.line_total_minor,image:l.image?.url??null,featured_image:l.image?{url:l.image.url,alt:l.image.alt}:null,available:l.available!==false,index:i+1}));
  return {token:'',item_count:lines.reduce((s,l)=>s+l.quantity,0),items:lines,total_price:q.subtotal_minor,original_total_price:q.subtotal_minor,items_subtotal_price:q.subtotal_minor,currency:'MYR',requires_shipping:true};
 }
 async function body(init){try{const raw=init?.body;if(typeof raw==='string')return JSON.parse(raw);if(raw instanceof FormData)return Object.fromEntries(raw);}catch{}return {};}
@@ -14,17 +14,18 @@ async function add(input){
  const wanted=(Array.isArray(input.items)?input.items:[input]).map(i=>({variant_id:String(i.id??i.variant_id??''),quantity:Math.max(1,Number.parseInt(i.quantity??1,10)||1)})).filter(i=>/^[1-9]\d{0,17}$/.test(i.variant_id));
  if(!wanted.length)return json({status:422,message:'Choose a product option',description:'This item could not be added.'},422);
  const before=bag(),next=before.map(i=>({...i}));
- for(const w of wanted){const line=next.find(i=>i.variant_id===w.variant_id);if(line)line.quantity=Math.min(MAX_QTY,line.quantity+w.quantity);else next.push({variant_id:w.variant_id,quantity:Math.min(MAX_QTY,w.quantity)});}
+ for(const w of wanted){const line=next.find(i=>i.variant_id===w.variant_id&&!i.engraving);if(line)line.quantity=Math.min(MAX_QTY,line.quantity+w.quantity);else next.push({variant_id:w.variant_id,quantity:Math.min(MAX_QTY,w.quantity)});}
  // Check with the server before keeping the change: unknown, unlisted or sold-out variants are refused.
  let q;try{q=await quote(next);}catch(e){return json({status:e.status||422,message:'Unavailable',description:e.message},422);}
- const bad=q.lines.find(l=>wanted.some(w=>w.variant_id===l.variant_id)&&l.available===false);
- if(bad)return json({status:422,message:'Unavailable',description:bad.title?'Not enough stock for this quantity.':'This item is no longer available.'},422);
+ const bad=q.lines.find(l=>!l.engraving&&wanted.some(w=>w.variant_id===l.variant_id)&&l.available===false);
+ // Items that need engraving are added from the product page, where the engraving is entered.
+ if(bad)return json({status:422,message:'Unavailable',description:bad.engraving_error?'Choose the engraving on the product page.':bad.title?'Not enough stock for this quantity.':'This item is no longer available.'},422);
  setBag(next);
  const added=q.lines.filter(l=>wanted.some(w=>w.variant_id===l.variant_id)).map(l=>({id:Number(l.variant_id),variant_id:Number(l.variant_id),quantity:l.quantity,title:l.title,product_title:l.title,variant_title:l.variant_title||null,price:l.unit_price_minor,url:'/products/'+l.handle,image:l.image?.url??null}));
  return json(Array.isArray(input.items)?{items:added}:added[0]);
 }
 async function change(input){
- const items=bag(),key=String(input.id??'');let target=key?items.find(i=>i.variant_id===key):items[(Number(input.line)||0)-1];
+ const items=bag(),key=String(input.id??'');let target=key?items.find(i=>i.variant_id===key&&!i.engraving)??items.find(i=>i.variant_id===key):items[(Number(input.line)||0)-1];
  if(target){const n=Math.max(0,Math.min(MAX_QTY,Number.parseInt(input.quantity??0,10)||0));target.quantity=n;setBag(items);}
  return json(await cart());
 }

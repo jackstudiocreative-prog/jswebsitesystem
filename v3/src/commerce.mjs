@@ -4,6 +4,8 @@ import {adjustStock,syncSummary} from './inventory.mjs';
 import {amount} from './payments.mjs';
 import {queueEmail} from './email.mjs';
 import {publicImage} from './media-urls.mjs';
+import {hasColumn} from './schema.mjs';
+import {normalizeEngraving,engravingError,offersEngraving} from '../shared/personalization.mjs';
 import {MAX_PENDING_PER_EMAIL} from './protect.mjs';
 // Orders and payments. Everything a customer sends is re-priced on the server. Stock is reserved at
 // checkout through the ledger ('sale') and released if the order expires or is cancelled
@@ -35,18 +37,32 @@ export async function quoteShipping(db,groups){
 }
 function linesInput(value){
  if(!Array.isArray(value)||!value.length||value.length>50)bad('Your bag needs 1–50 items');
- const lines=value.map(l=>{if(!l||typeof l!=='object')bad('Invalid item');const q=l.quantity;if(!Number.isInteger(q)||q<1||q>20)bad('Quantity must be 1–20');return {variant_id:key(l.variant_id),quantity:q};});
- if(new Set(lines.map(l=>l.variant_id)).size!==lines.length)bad('Duplicate items');
- return lines;
+ return value.map(l=>{if(!l||typeof l!=='object')bad('Invalid item');const q=l.quantity;if(!Number.isInteger(q)||q<1||q>20)bad('Quantity must be 1–20');
+  if(l.engraving!=null&&(typeof l.engraving!=='string'||l.engraving.length>80))bad('Invalid engraving');
+  return {variant_id:key(l.variant_id),quantity:q,engraving:l.engraving??''};});
 }
-// Prices the bag from the database. `lock` is used at checkout; the bag preview reads without locks.
+// Prices the bag from the database. `strict` (checkout) refuses any problem; the bag preview reports it per line.
+// A line is one variant with one engraving: the same variant with different engravings stays separate,
+// identical lines are merged. Stock is checked against the total of all lines of a variant.
 async function price(db,lines,{strict=true}={}){
- const rows=(await db.query(`SELECT v.*,p.title,p.option_names,p.shipping_profile,p.weight_grams,p.handle,(${SELLABLE}) AS sellable FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.id = ANY($1::bigint[])`,[lines.map(l=>l.variant_id)])).rows;
- const out=[],groups={};let subtotal=0;
+ const rows=(await db.query(`SELECT v.*,p.title,p.option_names,p.shipping_profile,p.weight_grams,p.handle,to_jsonb(p)->'personalization' AS personalization,(${SELLABLE}) AS sellable FROM product_variants v JOIN products p ON p.id=v.product_id WHERE v.id = ANY($1::bigint[])`,[[...new Set(lines.map(l=>l.variant_id))]])).rows;
+ const merged=[];
  for(const l of lines){
   const v=rows.find(r=>String(r.id)===l.variant_id);
-  if(!v||!v.sellable){if(strict)throw new HttpError(409,'An item in your bag is no longer available.');out.push({...l,available:false});continue;}
-  const line={variant_id:l.variant_id,product_id:String(v.product_id),media_id:v.media_id==null?null:String(v.media_id),title:v.title,handle:v.handle,variant_title:variantTitle(v.option_names,v.option_values),sku:v.sku,unit_price_minor:v.price_minor,quantity:l.quantity,line_total_minor:v.price_minor*l.quantity,available:v.inventory>=l.quantity,in_stock:v.inventory};
+  const engraving=v?normalizeEngraving(v.personalization,l.engraving):String(l.engraving??'').trim();
+  const same=merged.find(m=>m.variant_id===l.variant_id&&m.engraving===engraving);
+  if(same){same.quantity+=l.quantity;if(same.quantity>20)bad('Quantity must be 1–20');}else merged.push({...l,engraving});
+ }
+ const wanted={};for(const l of merged)wanted[l.variant_id]=(wanted[l.variant_id]??0)+l.quantity;
+ const out=[],groups={};let subtotal=0;
+ for(const l of merged){
+  const v=rows.find(r=>String(r.id)===l.variant_id);
+  if(!v||!v.sellable){if(strict)throw new HttpError(409,'An item in your bag is no longer available.');out.push({variant_id:l.variant_id,quantity:l.quantity,engraving:l.engraving||null,available:false});continue;}
+  const problem=engravingError(v.personalization,v.id,l.engraving);
+  if(problem&&strict)bad(`${v.title}: ${problem}`);
+  const line={variant_id:l.variant_id,product_id:String(v.product_id),media_id:v.media_id==null?null:String(v.media_id),title:v.title,handle:v.handle,variant_title:variantTitle(v.option_names,v.option_values),sku:v.sku,
+   engraving:l.engraving||null,engraving_label:offersEngraving(v.personalization,v.id)?v.personalization.label:null,engraving_error:problem,
+   unit_price_minor:v.price_minor,quantity:l.quantity,line_total_minor:v.price_minor*l.quantity,available:!problem&&v.inventory>=wanted[l.variant_id],in_stock:v.inventory};
   out.push(line);subtotal+=line.line_total_minor;
   const g=groups[v.shipping_profile]??={subtotal:0,weight:0};g.subtotal+=line.line_total_minor;g.weight+=v.weight_grams*l.quantity;
  }
@@ -85,7 +101,7 @@ async function newPayment(db,order,payments){
  const payment=(await db.query('INSERT INTO payments(order_id,provider,payment_ref,amount_minor) VALUES ($1,$2,$3,$4) RETURNING *',[order.id,payments.provider,`${order.number}P${n}`,order.total_minor])).rows[0];
  return payment;
 }
-const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
+const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,personalization:l.personalization??null,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
 // Releases stock for unpaid orders past their reservation. Orders with a recent pending (e.g. FPX
 // bank-pending) payment are kept for up to 24 hours while the bank confirms.
 export async function sweepExpired(db,limit=20){
@@ -129,13 +145,17 @@ export async function checkout(db,input,payments,custIp){
  const owners=(await db.query('SELECT product_id FROM product_variants WHERE id = ANY($1::bigint[])',[lines.map(l=>l.variant_id)])).rows;
  await lockProducts(db,owners.map(v=>v.product_id));
  const priced=await price(db,lines);
+ // Engraved lines need migration 011; never take an order that would lose the engraving.
+ const engravingColumn=await hasColumn(db,'order_lines','personalization');
+ if(!engravingColumn&&priced.lines.some(l=>l.engraving))throw new HttpError(503,'Engraving cannot be ordered online yet. Remove the engraving or contact us.');
  const shipping=await quoteShipping(db,priced.groups);
  const number='JSW'+(await db.query("SELECT nextval('order_number_seq') AS n")).rows[0].n;
  const order=(await db.query(`INSERT INTO orders(number,idempotency_key,access_token_hash,customer_name,email,phone,address_line1,address_line2,city,postcode,state,note,subtotal_minor,shipping_minor,total_minor,shipping_names,expires_at)
   VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()+make_interval(mins=>$17)) RETURNING *`,[number,input.idempotency_key,hash(access),customer.customer_name,customer.email,customer.phone,customer.address_line1,customer.address_line2,customer.city,customer.postcode,customer.state,customer.note,priced.subtotal,shipping.shipping_minor,priced.subtotal+shipping.shipping_minor,shipping.names.join(' · '),RESERVE_MINUTES])).rows[0];
  await lockProducts(db,priced.lines.map(l=>l.product_id));
  for(const l of priced.lines){
-  await db.query('INSERT INTO order_lines(order_id,product_id,variant_id,title,variant_title,sku,unit_price_minor,quantity,line_total_minor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',[order.id,l.product_id,l.variant_id,l.title,l.variant_title,l.sku,l.unit_price_minor,l.quantity,l.line_total_minor]);
+  if(engravingColumn)await db.query('INSERT INTO order_lines(order_id,product_id,variant_id,title,variant_title,sku,unit_price_minor,quantity,line_total_minor,personalization) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[order.id,l.product_id,l.variant_id,l.title,l.variant_title,l.sku,l.unit_price_minor,l.quantity,l.line_total_minor,l.engraving]);
+  else await db.query('INSERT INTO order_lines(order_id,product_id,variant_id,title,variant_title,sku,unit_price_minor,quantity,line_total_minor) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',[order.id,l.product_id,l.variant_id,l.title,l.variant_title,l.sku,l.unit_price_minor,l.quantity,l.line_total_minor]);
   try{await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:number,orderId:order.id});}
   catch(e){if(e.status===409){const left=(await db.query('SELECT inventory FROM product_variants WHERE id=$1',[l.variant_id])).rows[0].inventory;throw new HttpError(409,left?`Only ${left} left of ${l.title}${l.variant_title?' · '+l.variant_title:''}.`:`${l.title}${l.variant_title?' · '+l.variant_title:''} just sold out.`);}throw e;}
  }
