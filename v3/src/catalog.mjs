@@ -25,7 +25,10 @@ export async function list(db,resource,params=new URLSearchParams()){
  const filter=where.length?' WHERE '+where.join(' AND '):'';
  const paged=params.get('paged')==='true',limit=paged?integer(Number(params.get('limit')??25),100):200,offset=paged?integer(Number(params.get('offset')??0)):0;if(!limit)bad('Limit must be positive');
  const total=paged?Number((await db.query(`SELECT count(*) AS n FROM ${resource}${filter}`,args)).rows[0].n):0;
- const order=resource==='collections'?'position,id':'id';
+ // Product list sorting (allowlist; default newest first, as staff usually look for recent work).
+ const SORT={newest:'id DESC',oldest:'id',title:'lower(title),id','title-desc':'lower(title) DESC,id','price-asc':'price_minor,id','price-desc':'price_minor DESC,id','inventory-asc':'inventory,id','inventory-desc':'inventory DESC,id'};
+ const sort=params.get('sort');if(sort&&(resource!=='products'||!SORT[sort]))bad('Invalid sort');
+ const order=resource==='collections'?'position,id':resource==='products'?SORT[sort??'newest']:'id DESC';
  const extra=resource==='products'?`,(SELECT count(*)::int FROM product_variants v WHERE v.product_id=products.id AND v.active) AS variant_count,${"EXISTS(SELECT 1 FROM product_collections pc JOIN collections c ON c.id=pc.collection_id WHERE pc.product_id=products.id AND c.status='active')"} AS listed`:'';
  const rows=(await db.query(`SELECT *${extra} FROM ${resource}${filter} ORDER BY ${order} LIMIT $${args.length+1} OFFSET $${args.length+2}`,[...args,limit,offset])).rows;
  return paged?{items:rows,total,limit,offset}:rows;

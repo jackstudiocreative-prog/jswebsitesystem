@@ -5,7 +5,7 @@ const nav=(page,name)=>page.getByRole('navigation',{name:'Admin navigation'}).ge
 
 test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on the storefront',async({page})=>{
  const g=guard(page);page.on('dialog',d=>d.accept());const heading='E2E Journey '+Date.now();
- await page.goto('/admin');await nav(page,'Website');
+ await page.goto('/admin');await nav(page,'Themes');
  await expect(page.getByRole('heading',{name:'Theme library'})).toBeVisible();await axe(page,'online store');
  await page.getByRole('button',{name:'Add theme'}).click();
  await expect(page.getByRole('heading',{name:'Edit theme'})).toBeVisible();await expect(page.getByText('Showing the saved theme.')).toBeVisible();
@@ -47,7 +47,7 @@ test('staff add the Jack Studio 2026 theme, edit it, publish it and see it on th
 });
 
 test('Preview opens the real storefront with the edited theme; links keep the preview until Exit preview',async({page,context})=>{
- const g=guard(page);await page.goto('/admin');await nav(page,'Website');
+ const g=guard(page);await page.goto('/admin');await nav(page,'Themes');
  await page.locator('.theme-current').getByRole('button',{name:'Edit theme'}).click();
  await page.getByRole('button',{name:'Edit Hero banner'}).click();
  await page.getByLabel('Heading text',{exact:true}).fill('Unsaved preview heading');

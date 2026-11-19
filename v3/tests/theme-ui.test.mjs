@@ -102,8 +102,9 @@ test('pages stay usable when the themes service is unavailable (e.g. before migr
  const ui=mountAdmin(api,'editor',m=>messages.push(m));
  try{
   document.querySelector('[data-view="Website"]').click();await settle();
-  const text=document.getElementById('admin-content').textContent;
-  assert.match(text,/Themes are unavailable right now/);assert.match(text,/Create a page/);
+  assert.match(document.getElementById('admin-content').textContent,/Themes are unavailable right now/);
+  [...document.querySelectorAll('button')].find(b=>b.textContent==='Manage pages').click();await settle();
+  assert.match(document.getElementById('admin-content').textContent,/Create a page/);
  }finally{ui.destroy();}
 });
 

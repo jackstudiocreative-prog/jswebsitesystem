@@ -5,7 +5,7 @@ test.beforeEach(async({page})=>placeholderImages(page));
 const nav=(page,name)=>page.getByRole('navigation',{name:'Admin navigation'}).getByRole('button',{name,exact:true}).click();
 test('staff create a product with variants, adjust stock and see it in inventory',async({page})=>{
  const g=guard(page);const title='E2E Sling '+Date.now();
- await page.goto('/admin');await expect(page.getByText('Signed in as editor')).toBeVisible();await axe(page,'dashboard');
+ await page.goto('/admin');await expect(page.getByRole('button',{name:'editor@e2e.test'})).toBeVisible();await axe(page,'dashboard');
  await nav(page,'Products');await page.getByRole('button',{name:'Add product'}).click();
  await page.getByLabel('Title',{exact:true}).fill(title);await page.getByLabel('Price (MYR)').fill('189.00');await page.getByLabel('SKU (unique, optional for drafts)').fill('SL-'+Date.now());await page.getByLabel('Inventory',{exact:true}).fill('4');
  await page.getByLabel('E2E Wallets').check();await page.getByLabel('Status').first().selectOption('active');await axe(page,'product editor');
@@ -50,6 +50,6 @@ test('viewer role can read but not change anything',async({page})=>{
  const g=guard(page);
  await page.goto('/admin?role=viewer');await nav(page,'Products');
  await expect(page.getByRole('button',{name:'Add product'})).toBeDisabled();
- await page.getByRole('button',{name:'View'}).first().click();await expect(page.getByRole('button',{name:'Save product'})).toBeDisabled();
+ await page.getByRole('button',{name:'View',exact:true}).first().click();await expect(page.getByRole('button',{name:'Save product'})).toBeDisabled();
  g.check();
 });

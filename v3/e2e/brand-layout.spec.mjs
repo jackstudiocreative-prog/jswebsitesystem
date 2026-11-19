@@ -2,7 +2,8 @@ import {test,expect} from '@playwright/test';
 import {seed,axe,guard} from './helpers.mjs';
 import {mkdir} from 'node:fs/promises';
 test.beforeAll(async({request})=>seed(request));
-const nav=(page,name)=>page.locator('nav[aria-label="Admin navigation"]').getByRole('button',{name,exact:true}).click();
+// On small screens the navigation is behind the Menu button.
+const nav=async(page,name)=>{const menu=page.getByRole('button',{name:'Menu'});if(await menu.isVisible()){await menu.click();await expect(menu).toHaveAttribute('aria-expanded','true');}await page.locator('nav[aria-label="Admin navigation"]').getByRole('button',{name,exact:true}).click();if(await menu.isVisible())await expect(menu).toHaveAttribute('aria-expanded','false');};
 test('2026 workspace keeps priority metrics, secondary tools and mobile navigation usable',async({page})=>{
  const g=guard(page);
  await page.goto('/admin');
@@ -23,8 +24,7 @@ test('2026 workspace keeps priority metrics, secondary tools and mobile navigati
  await page.screenshot({path:'test-results/brand-previews/products-desktop.png',fullPage:true});
  await nav(page,'Pages');await expect(page.getByRole('button',{name:'Create page',exact:true})).toBeVisible();
  await page.setViewportSize({width:390,height:844});
- for(const name of ['Dashboard','Products','Inventory','Orders','Customers','Media Library','Website','Pages','Settings']){
-  if(name==='Inventory')await nav(page,'Products');
+ for(const name of ['Dashboard','Products','Inventory','Orders','Customers','Media','Themes','Pages','Settings']){
   await nav(page,name);await expect(page.locator('.page-heading')).toBeVisible();
   expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBeTruthy();
  }
