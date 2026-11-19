@@ -50,24 +50,68 @@ export async function productCards(db,where='',params=[],{order='p.id DESC',limi
  return rows.map(p=>card(p,media));
 }
 
+// Filters shared by collection pages and search: in stock, price range (RM), and option values
+// (e.g. option.color=Brown&option.color=Black). Each filter must match one active variant.
+function filterSql(params,add){
+ const parts=[];
+ if(params.get('available')==='1')parts.push('EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND v.inventory>0)');
+ const rm=k=>{const v=params.get(k);if(v==null||v==='')return null;const n=Number(v);if(!Number.isFinite(n)||n<0||n>1e6)throw new HttpError(400,'Invalid price filter');return Math.round(n*100);};
+ const min=rm('price_min'),max=rm('price_max');
+ if(min!=null||max!=null)parts.push(`EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND v.price_minor>=${add(min??0)} AND v.price_minor<=${add(max??100000000)})`);
+ const options={};
+ for(const [k,v] of params){const m=k.match(/^option\.([a-z0-9 _-]{1,40})$/i);if(!m)continue;if(String(v).length>80)throw new HttpError(400,'Invalid filter');(options[m[1].toLowerCase()]??=[]).push(String(v));}
+ if(Object.keys(options).length>5)throw new HttpError(400,'Too many filters');
+ for(const [name,values] of Object.entries(options))parts.push(`EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND lower(v.option_values[array_position((SELECT array_agg(lower(x)) FROM unnest(p.option_names) x),${add(name)})])=ANY(${add(values.map(x=>x.toLowerCase()))}::text[]))`);
+ return {parts,min,max,options,inStock:params.get('available')==='1'};
+}
+// Choices for the filter panel, from the products in the listing before filters are applied.
+async function facets(db,base,args){
+ const where=`${LISTED}${base?' AND '+base:''}`;
+ const rows=(await db.query(`SELECT lower(o.name) AS name,min(o.name) AS label,v.option_values[o.i] AS value,count(DISTINCT p.id)::int AS n
+  FROM products p CROSS JOIN LATERAL unnest(p.option_names) WITH ORDINALITY AS o(name,i) JOIN product_variants v ON v.product_id=p.id AND v.active
+  WHERE ${where} AND v.option_values[o.i] IS NOT NULL GROUP BY 1,3 ORDER BY 1,3`,args)).rows;
+ const options=[];for(const r of rows){let o=options.find(x=>x.name===r.name);if(!o)options.push(o={name:r.name,label:r.label.charAt(0).toUpperCase()+r.label.slice(1),values:[]});o.values.push({value:r.value,count:r.n});}
+ const price=(await db.query(`SELECT min(v.price_minor)::int AS min,max(v.price_minor)::int AS max FROM products p JOIN product_variants v ON v.product_id=p.id AND v.active WHERE ${where}`,args)).rows[0];
+ return {options:options.filter(o=>o.values.length>1&&o.values.length<=40),price:{min:price.min??0,max:price.max??0}};
+}
+async function listing(db,{base='',args=[],params,order}){
+ const page=Math.min(500,Math.max(1,Number.parseInt(params.get('page')??'1',10)||1));
+ const all=[...args],add=v=>{all.push(v);return '$'+all.length;};
+ const f=filterSql(params,add),where=[base,...f.parts].filter(Boolean).join(' AND ');
+ const total=(await db.query(`SELECT count(*)::int AS n FROM products p WHERE ${LISTED}${where?' AND '+where:''}`,all)).rows[0].n;
+ const products=await productCards(db,where,all,{order,offset:(page-1)*PAGE_SIZE});
+ return {products,total,page,pages:Math.max(1,Math.ceil(total/PAGE_SIZE)),available_only:f.inStock,
+  filters:{...await facets(db,base,args),applied:{price_min:f.min,price_max:f.max,options:f.options,available:f.inStock}}};
+}
+
 export async function storefrontCollection(db,handle,params=new URLSearchParams()){
  if(!HANDLE.test(handle)||handle.length>100)throw new HttpError(404,'Collection not found');
  const sort=SORTS[params.get('sort')]?params.get('sort'):'featured';
- const page=Math.min(500,Math.max(1,Number.parseInt(params.get('page')??'1',10)||1));
- const inStock=params.get('available')==='1';
- let collection,where='',args=[];
+ let collection,base='',args=[];
  if(handle==='all')collection={title:'All products',handle:'all',description:''};
  else{
   const c=(await db.query("SELECT id,title,slug,description FROM collections WHERE slug=$1 AND status='active'",[handle])).rows[0];
   if(!c)throw new HttpError(404,'Collection not found');
   collection={title:c.title,handle:c.slug,description:c.description??''};
-  where='p.id IN (SELECT product_id FROM product_collections WHERE collection_id=$1)';args=[c.id];
+  base='p.id IN (SELECT product_id FROM product_collections WHERE collection_id=$1)';args=[c.id];
  }
- if(inStock)where=(where?where+' AND ':'')+'EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND v.inventory>0)';
- const total=(await db.query(`SELECT count(*)::int AS n FROM products p WHERE ${LISTED}${where?' AND '+where:''}`,args)).rows[0].n;
  const order=SORTS[sort]??(handle==='all'?FEATURED_ALL:FEATURED_IN);
- const products=await productCards(db,where,args,{order,offset:(page-1)*PAGE_SIZE});
- return {collection,products,total,page,pages:Math.max(1,Math.ceil(total/PAGE_SIZE)),sort,available_only:inStock};
+ return {collection,sort,...await listing(db,{base,args,params,order})};
+}
+
+// Search: product title, tags, SKU (matched but never shown) and description text. Best title
+// matches first. 2–80 characters; % and _ are taken literally.
+export async function storefrontSearch(db,params=new URLSearchParams()){
+ const q=String(params.get('q')??'').replace(/\s+/g,' ').trim();
+ if(q.length<2)return {query:q,products:[],total:0,page:1,pages:1,too_short:true,filters:{options:[],price:{min:0,max:0},applied:{}}};
+ if(q.length>80)throw new HttpError(400,'Search is limited to 80 characters');
+ const like='%'+q.replace(/[\\%_]/g,m=>'\\'+m)+'%',words=q.split(' ').slice(0,6).map(w=>'%'+w.replace(/[\\%_]/g,m=>'\\'+m)+'%');
+ // Every word must appear somewhere (title, tags, SKU or description).
+ const match=i=>`(p.title ILIKE $${i} OR coalesce(to_jsonb(p)->>'tags','') ILIKE $${i} OR p.description ILIKE $${i} OR EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND v.sku ILIKE $${i}))`;
+ const base=`$1::text<>'' AND `+words.map((_,i)=>match(i+2)).join(' AND ');
+ const sort=SORTS[params.get('sort')]&&params.get('sort')!=='featured'?params.get('sort'):'relevance';
+ const order=sort==='relevance'?'(p.title ILIKE $1) DESC,p.available DESC,p.id DESC':SORTS[sort];
+ return {query:q,sort,...await listing(db,{base,args:[like,...words],params,order})};
 }
 
 export async function storefrontProduct(db,handle){

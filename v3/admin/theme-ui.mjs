@@ -94,8 +94,17 @@ export function createThemes(h){
   const preview=button('Preview',async()=>{const data=readOnly?await api(`themes/${id}/preview`):await api('themes/preview',{content},'POST');if(!readOnly)data.pages=(await api('themes/preview-pages',{content},'POST')).pages;openPreview(data,theme.name+(dirty?' (unsaved changes)':''));});
   const actions=el('div',undefined,'actions');actions.append(preview,save);
   if(!theme.is_live)actions.append(button(dirty?'Save and publish':'Publish',async()=>{if(!confirmed(`Publish "${theme.name}"? It replaces the current theme on the storefront.`))return;if(dirty)await persist();await api(`themes/${id}/publish`,{revision:theme.revision},'POST');dirty=false;setDirty(false);notify(`${theme.name} is now live.`);await navigate('Website');},readOnly));
-  actions.append(button('Back to Online Store',()=>navigate('Website')));
-  bar.append(devices,actions);root.append(bar);
+  // Links to check: theme links that lead nowhere in this store (shown here so staff can fix menus;
+  // the storefront hides links to features it does not have).
+  const linkReport=el('section',undefined,'card link-report');linkReport.hidden=true;linkReport.setAttribute('aria-label','Links to check');
+  const checkLinks=button('Check links',async()=>{const r=await api('themes/links',{content},'POST');linkReport.hidden=false;linkReport.replaceChildren(el('h2','Links to check'));
+   if(!r.problems.length){linkReport.append(el('p',`All ${r.checked} links lead to a page in this store.`,'muted'));return;}
+   linkReport.append(el('p',`${r.problems.length} of ${r.checked} links need attention. Edit the menu or section that contains them.`,'muted'));
+   const wrap=el('div',undefined,'table-wrap'),t=el('table'),head=el('tr'),body=el('tbody');for(const x of ['Link','Problem','Shown as','Where'])head.append(el('th',x));const thead=el('thead');thead.append(head);t.append(thead,body);wrap.append(t);
+   for(const p of r.problems){const tr=el('tr');for(const x of [p.href||'(empty)',p.reason,p.labels.join(', '),p.where.join(', ')])tr.append(el('td',x));body.append(tr);}
+   linkReport.append(wrap);linkReport.scrollIntoView?.({block:'nearest'});},readOnly);
+  actions.append(checkLinks,button('Back to Online Store',()=>navigate('Website')));
+  bar.append(devices,actions);root.append(bar,linkReport);
   // Three parts, as in Shopify's editor: section tree (left), live preview (centre) and the selected
   // section's settings (right on wide screens, under the tree on smaller ones).
   const layout=el('div',undefined,'theme-editor'),panel=el('section',undefined,'card theme-panel'),previewCard=el('section',undefined,'card theme-preview'),inspector=el('section',undefined,'card theme-inspector'),note=el('p','','muted');

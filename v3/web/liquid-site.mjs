@@ -3,6 +3,7 @@
 // the small runtime and the section scripts load as same-site files.
 import {previewPages,previewInfo} from './theme-behaviour.mjs';
 import './cart-bridge.mjs';
+import {unsupportedLink} from '../shared/routes.mjs';
 import './image-fallback.mjs';
 import {updateBadges} from './bag.mjs';
 export async function siteData(slug){
@@ -12,6 +13,12 @@ export async function siteData(slug){
 const load=(tag,attrs)=>new Promise(ok=>{const n=document.createElement(tag);Object.assign(n,attrs);n.onload=n.onerror=()=>ok();(tag==='link'?document.head:document.body).append(n);});
 // Replaces the page with header + main + footer. `main` (optional) is an element to show instead of the
 // page sections (pages that are not built from the theme).
+// Links to features this store does not have (blog, customer accounts) are removed with their menu item,
+// so visitors never meet a dead end. Staff see the list in the theme editor ("Links to check").
+function hideMissingLinks(root){
+ for(const a of root.querySelectorAll('a[href]')){if(!unsupportedLink(a.getAttribute('href')))continue;
+  const item=a.closest('li');const wrap=item&&item.querySelectorAll('a[href]').length===1?item:a;wrap.remove();}
+}
 export async function mountSite(data,main){
  // Only the Shopify theme's own styles apply (the V3 home styles use the same class names).
  for(const href of main?['/theme.css']:['/theme.css','/styles.css','/page-sections.css'])document.head.querySelector(`link[href="${href}"]`)?.remove();
@@ -25,6 +32,7 @@ export async function mountSite(data,main){
  const foot=document.createElement('div');foot.className='lq-footer';foot.innerHTML=data.footer??'';
  for(const n of [...document.body.children])if(n!==bar&&n.tagName!=='SCRIPT')n.remove();
  document.body.className='lq-body';document.body.append(head,body,foot);if(bar)document.body.prepend(bar);
+ hideMissingLinks(document.body);
  await load('script',{src:'/theme-assets/shopify/runtime.js'});await load('script',{src:'/theme-assets/shopify/jack-studio.js'});
  if(data.scripts?.length)await load('script',{src:'/api/v3/storefront/theme/scripts.js?s='+encodeURIComponent(data.scripts.join(','))});
  updateBadges();

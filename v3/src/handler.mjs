@@ -5,9 +5,9 @@ import { authorize,HttpError } from './auth.mjs';
 import { list,save,detail,dashboard } from './catalog.mjs';
 import { adjust,inventoryList,adjustmentList } from './inventory.mjs';
 import { listPages,pageDetail,createPage,savePage,publishPage,unpublishPage,restoreRevision,previewPage,previewDraft,publicPage } from './pages.mjs';
-import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,autofillTheme,previewTheme,publicThemePage,previewThemePages,themeScripts,previewThemeDraft,publicTheme } from './themes.mjs';
+import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,autofillTheme,previewTheme,publicThemePage,previewThemePages,themeScripts,previewThemeDraft,publicTheme,themeLinkCheck } from './themes.mjs';
 import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates } from './commerce.mjs';
-import { storefrontProduct,storefrontCollection,storefrontIndex } from './storefront.mjs';
+import { storefrontProduct,storefrontCollection,storefrontIndex,storefrontSearch } from './storefront.mjs';
 import { deliverPublicMedia,CACHE_SECONDS } from './public-media.mjs';
 import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
@@ -69,6 +69,10 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const location=await deliverPublicMedia(db,pubMedia[1],url.searchParams.get('w'),cloud);
    res.statusCode=302;res.setHeader('Location',location);res.setHeader('Cache-Control',`public, max-age=${CACHE_SECONDS}, s-maxage=${CACHE_SECONDS}`);res.end('{}');return;
   }
+  if(path==='/api/v3/storefront/search'){
+   if(req.method!=='GET')throw new HttpError(405,'Method not available');
+   db=await pool.connect();res.setHeader('Cache-Control','public, max-age=30, s-maxage=60');res.end(JSON.stringify(await storefrontSearch(db,url.searchParams)));return;
+  }
   // Public collection listing: /api/v3/storefront/collections/<handle> ('all' = every listed product).
   const pubCollection=path.match(/^\/api\/v3\/storefront\/collections\/([a-z0-9]+(?:-[a-z0-9]+)*)$/);
   if(pubCollection){
@@ -114,10 +118,10 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   // page[1]: unsaved preview; page[2]: page id; page[3]: action; page[4]: version id.
   const action=page?.[1]?'draft-preview':page?.[3]?.startsWith('revisions/')?'restore':page?.[3];
   if(page&&!(action==='draft-preview'?['POST']:!page[2]?['GET','POST']:!action?['GET','PATCH']:action==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
-  const theme=path.match(/^\/api\/v3\/themes(?:\/(preview|preview-pages)|\/([1-9]\d{0,17})(?:\/(preview|publish|archive|autofill))?)?$/);
+  const theme=path.match(/^\/api\/v3\/themes(?:\/(preview|preview-pages|links)|\/([1-9]\d{0,17})(?:\/(preview|publish|archive|autofill))?)?$/);
   // theme[1]: unsaved preview; theme[2]: theme id; theme[3]: action.
-  const themeAction=theme?.[1]==='preview-pages'?'pages-preview':theme?.[1]?'draft-preview':theme?.[3];
-  if(theme&&!(themeAction==='draft-preview'||themeAction==='pages-preview'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
+  const themeAction=theme?.[1]==='preview-pages'?'pages-preview':theme?.[1]==='links'?'links':theme?.[1]?'draft-preview':theme?.[3];
+  if(theme&&!(themeAction==='draft-preview'||themeAction==='pages-preview'||themeAction==='links'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
   // Shopify image import: GET lists what is still to import, POST imports one small batch.
   const mediaImport=path==='/api/v3/media/import';
   // Shopify catalogue import (collections, products, memberships), one step per POST.
@@ -151,7 +155,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
    if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
-   else if(theme){result=themeAction==='pages-preview'?await previewThemePages(db,input,options.cloud??cloudAdapter()):themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'||themeAction==='pages-preview'?200:201;}
+   else if(theme){result=themeAction==='links'?await themeLinkCheck(db,input):themeAction==='pages-preview'?await previewThemePages(db,input,options.cloud??cloudAdapter()):themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'||themeAction==='pages-preview'?200:201;}
    else if(mediaImport)result=await importShopify(db,claims.sub,input,options.cloud??cloudAdapter());
    else if(catalogImport)result=await importCatalog(db,claims.sub,input,options.cloud??cloudAdapter(),options.storeJson,options.importBudget==null?undefined:{budget:options.importBudget});
    else if(page){result=action==='draft-preview'?await previewDraft(db,input,options.cloud??cloudAdapter()):!page[2]?await createPage(db,input,claims.sub):!action?await savePage(db,page[2],input,claims.sub):action==='publish'?await publishPage(db,page[2],input,claims.sub):action==='unpublish'?await unpublishPage(db,page[2],input,claims.sub):await restoreRevision(db,page[2],page[4],input,claims.sub);res.statusCode=page[2]||action==='draft-preview'?200:201;}

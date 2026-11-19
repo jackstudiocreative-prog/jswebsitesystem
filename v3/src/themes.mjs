@@ -5,6 +5,8 @@ import {HttpError} from './auth.mjs';
 import {autofillThemeImages} from './shopify-import.mjs';
 import {renderPage,scriptBundle} from './liquid.mjs';
 import {PUBLIC_CLOUD} from './media-urls.mjs';
+import {unsupportedLink} from '../shared/routes.mjs';
+import {LISTED as LISTED_RULE} from './storefront.mjs';
 import {templateFor,SITE_PAGES,SECTION_SCHEMAS} from '../shared/page-templates.mjs';
 // Online Store themes. One theme can be live; the rest are the theme library. As in Shopify, saving
 // the live theme changes the storefront immediately; staff duplicate it to work on a private copy.
@@ -145,6 +147,37 @@ export async function publicThemePage(db,slug){
  if(!SITE_PAGES.includes(slug)&&slug!=='_frame')throw new HttpError(404,'Page not found');
  const theme=(await db.query('SELECT content FROM themes WHERE is_live AND NOT archived')).rows[0];if(!theme)throw new HttpError(404,'No live theme');
  return pageHtml(db,content(theme.content),slug,PUBLIC_CLOUD);
+}
+// Links to check: every link in the theme's pages, header and footer that leads nowhere in this store
+// (missing or inactive collection/product/page, a feature the store does not have, or no address).
+export async function themeLinkCheck(db,input){
+ object(input,['content']);const clean=content(input.content);
+ const found=new Map();
+ for(const slug of SITE_PAGES){const r=await pageHtml(db,clean,slug,null);if(!r)continue;
+  for(const [part,html] of [['header',r.header],['page',r.html],['footer',r.footer]])
+   for(const m of String(html??'').matchAll(/<a\b[^>]*\bhref="([^"]*)"[^>]*>([\s\S]*?)<\/a>/gi)){
+    const href=m[1].replace(/&amp;/g,'&').trim(),label=m[2].replace(/<[^>]*>/g,' ').replace(/\s+/g,' ').trim().slice(0,60);
+    const where=part==='page'?(r.title||slug):part==='header'?'Header':'Footer';
+    const e=found.get(href)??{href,labels:new Set(),where:new Set()};e.labels.add(label||'(image or icon)');e.where.add(where);found.set(href,e);
+   }}
+ const pages=new Set((await db.query("SELECT slug FROM pages WHERE published_revision_id IS NOT NULL")).rows.map(r=>r.slug));
+ const collections=new Set((await db.query("SELECT slug FROM collections WHERE status='active'")).rows.map(r=>r.slug));
+ const problems=[];
+ for(const e of found.values()){
+  let reason=null;const href=e.href;
+  if(href===''||href==='#')reason='No address';
+  else if(/^(https?:|mailto:|tel:|#)/i.test(href))continue;
+  else{
+   reason=unsupportedLink(href);
+   let path;try{path=decodeURI(new URL(href,'https://store.invalid').pathname).replace(/\/+$/,'')||'/';}catch{path=href;}
+   const coll=path.match(/^\/collections\/([^/]+)$/)?.[1],prod=path.match(/^\/products\/([^/]+)$/)?.[1],pg=path.match(/^\/pages\/([^/]+)$/)?.[1];
+   if(!reason&&coll&&coll!=='all'&&!collections.has(coll))reason='Collection not found or not active';
+   if(!reason&&prod&&!(await db.query(`SELECT 1 FROM products p WHERE p.handle=$1 AND ${LISTED_RULE}`,[prod])).rows.length)reason='Product not shown in the store';
+   if(!reason&&pg&&!SITE_PAGES.includes(pg)&&!pages.has(pg)&&pg!=='wishlist')reason='Page not found';
+  }
+  if(reason)problems.push({href,reason,labels:[...e.labels],where:[...e.where]});
+ }
+ return {checked:found.size,problems};
 }
 // Staff preview of unsaved pages (all pages, or one with {page}); images use signed private previews.
 export async function previewThemePages(db,input,cloud){
