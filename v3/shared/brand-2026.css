@@ -351,3 +351,10 @@ body:not(.admin-2026){color:var(--js-espresso);background:var(--js-ivory)}
 .admin-2026 .badge.return-requested,.admin-2026 .badge.return-received{background:#f5e7ce;color:#76501f}
 .admin-2026 .badge.return-closed{background:#e7e7e2;color:#5d5a52}
 .admin-2026 .activity-list li{font-size:12.5px}
+/* Customers: import and list */
+.admin-2026 .link-button{border:0;background:none;padding:0;font-weight:600;color:var(--js-espresso);text-align:left;cursor:pointer;text-decoration:underline;text-underline-offset:3px}
+.admin-2026 .link-button:hover{background:none;color:var(--js-olive)}
+.admin-2026 .badge.neutral{background:#ecebe4;color:#5d5a52}
+.admin-2026 .import-card ol{margin:0 0 8px;padding-left:20px;line-height:1.8}
+.admin-2026 .import-card input[type=file]{padding:8px}
+.admin-2026 .pagination{align-items:center}

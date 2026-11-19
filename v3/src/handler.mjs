@@ -16,6 +16,7 @@ import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
 import { sitemap,robots } from './seo.mjs';
 import { authorizeMaintenance,runMaintenance } from './maintenance.mjs';
+import { importCustomers,listCustomers as customerList,customerDetail } from './customers.mjs';
 import { checkPayment,prepareGatewayRefund,finishGatewayRefund,settleGatewayRefund } from './aftersales.mjs';
 async function readBody(req){
  let body;
@@ -121,8 +122,12 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(gw[2]==='callback'){res.setHeader('Content-Type','text/plain');res.statusCode=r.ok?200:400;res.end(r.ok?'OK':'REJECTED');return;}
    res.statusCode=303;res.setHeader('Location',r.number?'/order/'+r.number:'/order/');res.end('{}');return;
   }
-  const sales=path.match(/^\/api\/v3\/(orders|customers)(?:\/([1-9]\d{0,17})(?:\/(fulfil|cancel|refunds|resolve|tracking|return|check-payment|gateway-refunds(?:\/([1-9]\d{0,17})\/settle)?))?)?$/);
+  // Customers: list, one imported record, and the Shopify CSV import (rows in batches).
+  const people=path.match(/^\/api\/v3\/customers\/(import|[1-9]\d{0,17})$/);
+  if(people&&req.method!==(people[1]==='import'?'POST':'GET'))throw new HttpError(405,'Method not available');
+  const sales=people?null:path.match(/^\/api\/v3\/(orders|customers)(?:\/([1-9]\d{0,17})(?:\/(fulfil|cancel|refunds|resolve|tracking|return|check-payment|gateway-refunds(?:\/([1-9]\d{0,17})\/settle)?))?)?$/);
   if(sales&&!(sales[1]==='customers'?(!sales[2]&&req.method==='GET'):sales[3]?req.method==='POST':req.method==='GET'))throw new HttpError(405,'Method not available');
+
   const page=path.match(/^\/api\/v3\/pages(?:\/(preview)|\/([1-9]\d{0,17})(?:\/(preview|publish|unpublish|revisions\/([1-9]\d{0,17})\/restore))?)?$/);
   // page[1]: unsaved preview; page[2]: page id; page[3]: action; page[4]: version id.
   const action=page?.[1]?'draft-preview':page?.[3]?.startsWith('revisions/')?'restore':page?.[3];
@@ -141,8 +146,8 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   const catalogImport=path==='/api/v3/catalog/import';
   if(catalogImport&&req.method!=='POST')throw new HttpError(405,'Method not available');
   if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
-  const match=page||sales||theme||mediaImport||catalogImport||ops?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
-  if(!match&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport&&!ops)throw new HttpError(404,'Not found');
+  const match=people||page||sales||theme||mediaImport||catalogImport||ops?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
+  if(!match&&!people&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport&&!ops)throw new HttpError(404,'Not found');
   if(match){
   if((['media/previews','inventory'].includes(match[1])&&(req.method!=='GET'||match[2]))||(match[1]==='inventory/adjustments'&&(!['GET','POST'].includes(req.method)||match[2])))throw new HttpError(405,'Method not available');
   if(!['GET','POST','PATCH'].includes(req.method) || (['media','session','dashboard'].includes(match[1])&&req.method!=='GET') || (match[1].startsWith('uploads/')&&(req.method!=='POST'||match[2])) || (req.method==='PATCH'&&!match[2]) || (req.method==='POST'&&match[2]) || (match[2]&&['session','dashboard'].includes(match[1])) || (match[3]&&match[1]!=='media') || (match[1]==='media'&&match[2]&&!match[3]))throw new HttpError(405,'Method not available');
@@ -160,7 +165,8 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    result=opsKind==='discounts'?await saveDiscount(db,ops[2],input,claims.sub):ops[5]?await sendPending(db,options.mailer??mailerFromEnv(),{limit:20}):await retryEmail(db,ops[6]);
    if(req.method==='POST'&&opsKind==='discounts')res.statusCode=201;
   }
-  else if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?{...await orderDetail(db,sales[2]),gateway:gatewayInfo(options)}:await listOrders(db,url.searchParams);
+  else if(req.method==='GET'&&people)result=await customerDetail(db,people[1]);
+  else if(req.method==='GET'&&sales)result=sales[1]==='customers'?await customerList(db,url.searchParams):sales[2]?{...await orderDetail(db,sales[2]),gateway:gatewayInfo(options)}:await listOrders(db,url.searchParams);
   else if(req.method==='GET'&&mediaImport)result=await importStatus(db);
   else if(req.method==='GET'&&theme)result=themeAction==='preview'?await previewTheme(db,theme[2],options.cloud??cloudAdapter(),url.searchParams.get('page')??'home'):theme[2]?await themeDetail(db,theme[2]):await listThemes(db);
   else if(req.method==='GET'&&page)result=action==='preview'?await previewPage(db,page[2],url.searchParams.get('source'),options.cloud??cloudAdapter()):page[2]?await pageDetail(db,page[2]):await listPages(db,url.searchParams);
@@ -174,7 +180,8 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(!isJson(req))throw new HttpError(415,'JSON required');
    const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
-   if(sales){
+   if(people)result=await importCustomers(db,input,claims.sub);
+   else if(sales){
     const act=sales[3]?.startsWith('gateway-refunds/')?'settle':sales[3];
     if(act==='check-payment')result=await checkPayment(db,sales[2],input,options.payments??paymentAdapter(process.env),claims.sub);
     else if(act==='settle')result=await settleGatewayRefund(db,sales[2],sales[4],input,claims.sub);

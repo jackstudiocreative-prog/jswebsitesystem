@@ -238,7 +238,7 @@ test('staff order workflow: roles, fulfil, cancel, refunds with restock, custome
   await pay([{variant_id:wallet.variant.id,quantity:2}]);
   const customers=(await request('customers?q=aisyah')).body;assert.equal(customers.total,1);assert.equal(customers.items[0].email,'aisyah@example.com');assert.equal(customers.items[0].orders,2);assert.equal(customers.items[0].spent_minor,9000);
   const dash=(await request('dashboard')).body;assert.equal(dash.paid_orders,2);assert.equal(Number(dash.revenue_minor),9000);assert.equal(dash.to_fulfil,1);
-  for(const [p,m] of [['orders/'+paid.id,'PATCH'],['customers/1','GET'],['orders/'+paid.id+'/fulfil','GET']])assert.equal((await request(p,m,m==='GET'?undefined:{})).status,405);
+  for(const [p,m] of [['orders/'+paid.id,'PATCH'],['customers/1','PATCH'],['orders/'+paid.id+'/fulfil','GET']])assert.equal((await request(p,m,m==='GET'?undefined:{})).status,405);
   for(const q of ['DELETE FROM orders','DELETE FROM payment_events','UPDATE payment_events SET outcome=$1','DELETE FROM refunds','UPDATE shipping_rates SET price_minor=0'])await assert.rejects(db.query(q,q.includes('$1')?['x']:[]),e=>e.code==='42501',q);
   assert.ok(await balanced(db));
  }finally{await close();}

@@ -107,21 +107,6 @@ export function createOrders(h){
   if(readOnly)for(const n of aside.querySelectorAll('input,textarea,select'))n.disabled=true;
   aside.append(button('Back to orders',()=>h.navigate('Orders')));
  }
- async function customers(t){
-  let at=0,q='';
-  const tools=el('form',undefined,'toolbar'),s=field('Search name, email or phone','','search');tools.append(s.wrap,el('button','Search'));root.append(tools);
-  const out=el('div');root.append(out);
-  async function load(){
-   const params=new URLSearchParams({limit:'25',offset:String(at)});if(q)params.set('q',q);
-   const data=await api('customers?'+params);if(!current(t))return;out.replaceChildren(el('p',`${data.total} customers with paid orders · Member accounts connect with JS Membership later`,'muted'));
-   if(!data.items.length){out.append(el('div',q?'No matching customers.':'Customers appear after their first paid order.','empty-state'));return;}
-   const wrap=el('div',undefined,'table-wrap'),tb=el('table'),thead=el('thead'),hr=el('tr'),body=el('tbody');for(const x of ['Customer','Email','Phone','State','Orders','Spent','Last order',''])hr.append(el('th',x));thead.append(hr);tb.append(thead,body);wrap.append(tb);out.append(wrap);
-   for(const c of data.items){const tr=el('tr');cell(tr,c.name);cell(tr,c.email);cell(tr,c.phone);cell(tr,c.state);cell(tr,String(c.orders));cell(tr,formatPrice(c.spent_minor));cell(tr,when(c.last_order_at));td(tr,button('Orders',()=>{search=c.email;status='';offset=0;return h.navigate('Orders',{keepFilters:true});}));body.append(tr);}
-   const pages=el('div',undefined,'pagination');pages.append(button('Previous',()=>{at=Math.max(0,at-25);return load();},at===0),button('Next',()=>{at+=25;return load();},at+data.items.length>=data.total));out.append(pages);
-  }
-  tools.addEventListener('submit',e=>{e.preventDefault();q=s.input.value.trim();at=0;load().catch(err=>notify(err.message));});
-  await load();
- }
  async function settings(t){
   const data=await api('storefront/shipping-rates');if(!current(t))return;
   const card=el('section',undefined,'card');card.append(el('h2','Payments'),el('p','eGHL Payment Gateway (same as the Shopify store). Merchant credentials are set as server environment variables and are never shown here. Refunds are processed in the eGHL merchant portal and recorded on the order.','muted'));
@@ -131,5 +116,5 @@ export function createOrders(h){
   card.append(el('p','Currency: MYR. Staff permissions and MFA are managed through the approved Supabase process. Editing these settings in the workspace is not implemented yet.','muted'));
   root.append(card);
  }
- return {orders,customers,settings,resetOrders:()=>{offset=0;search='';status='';},filterOrders:s=>{offset=0;search='';status=s;}};
+ return {orders,settings,resetOrders:()=>{offset=0;search='';status='';},filterOrders:s=>{offset=0;search='';status=s;}};
 }
