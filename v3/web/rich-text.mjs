@@ -9,6 +9,10 @@ const safeHref=h=>/^(https:\/\/|\/(?!\/)|mailto:|tel:|#)/i.test(h??'')?h:null;
 // Images only from the shop's own sources (also allowed by the page's Content-Security-Policy).
 const safeSrc=s=>{const v=String(s??'').replace(/^\/\//,'https://');return /^https:\/\/cdn\.shopify\.com\//.test(v)||/^\/api\/v3\/storefront\/media\/\d+/.test(v)?v:null;};
 
+// Event-handler attributes are renamed inside tags before parsing, so no browser ever sees one (some
+// Chromium builds report a CSP violation for them even in an inert DOMParser document).
+const defuse=html=>html.replace(/<[^>]+>/g,tag=>tag.replace(/([\s/"']|^)on([a-z]+\s*=)/gi,'$1data-removed-on$2'));
+const parse=html=>new DOMParser().parseFromString(defuse(html),'text/html');
 function rebuild(node,out){
  for(const child of node.childNodes){
   if(child.nodeType===3){out.append(document.createTextNode(child.nodeValue));continue;}
@@ -34,12 +38,12 @@ export function richText(html){
  const text=String(html??'');if(!text.trim())return frag;
  // Plain text (no tags): blank lines separate paragraphs.
  if(!/<[a-z!/]/i.test(text)){for(const para of text.split(/\n{2,}/).map(t=>t.trim()).filter(Boolean)){const p=document.createElement('p');p.textContent=para;frag.append(p);}return frag;}
- const doc=new DOMParser().parseFromString(text,'text/html');
+ const doc=parse(text);
  rebuild(doc.body,frag);
  return frag;
 }
 // Plain text for meta descriptions (entities decoded, tags removed).
 export function plainText(html,max=155){
- const text=/<[a-z!/]/i.test(String(html??''))?new DOMParser().parseFromString(String(html),'text/html').body.textContent:String(html??'');
+ const text=/<[a-z!/]/i.test(String(html??''))?parse(String(html)).body.textContent:String(html??'');
  return text.replace(/\s+/g,' ').trim().slice(0,max);
 }
