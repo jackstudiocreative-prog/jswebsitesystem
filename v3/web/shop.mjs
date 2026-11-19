@@ -212,7 +212,7 @@ async function order(number,polls=0){
  page(title,h('p',{class:'js-eyebrow'},'ORDER '+o.number),h('h1',{},title),h('p',{},copy),...extra,
   h('div',{class:'js-lines'},...o.lines.map(l=>h('div',{class:'js-line'},h('div',{},h('strong',{},l.title),l.variant_title?h('small',{},l.variant_title):null,l.personalization?h('small',{class:'js-engraving'},'Engraving: '+l.personalization):null),h('span',{},price(l.unit_price_minor)),h('span',{},'× '+l.quantity),h('span',{},price(l.line_total_minor))))),
   summary({...o,shipping_names:o.shipping_names?[o.shipping_names]:[]}),
-  o.status==='paid'?h('p',{class:'js-fine'},`Delivering to ${o.city}, ${o.state}.${o.fulfillment_status==='fulfilled'?' Shipped'+(o.tracking_number?' · Tracking '+o.tracking_number:'')+'.':''}${o.refunded_minor?' Refunded '+price(o.refunded_minor)+'.':''}`):null,
+  o.status==='paid'?h('p',{class:'js-fine'},`Delivering to ${o.city}, ${o.state}.${o.fulfillment_status==='fulfilled'?' Shipped'+(o.tracking_carrier?' with '+o.tracking_carrier:'')+(o.tracking_number?' · Tracking '+o.tracking_number:'')+'.':''}${o.refunded_minor?' Refunded '+price(o.refunded_minor)+'.':''} `,o.fulfillment_status==='fulfilled'&&/^https:\/\//.test(o.tracking_url??'')?h('a',{href:o.tracking_url,class:'js-link',rel:'noopener noreferrer',target:'_blank'},'Track your parcel'):null):null,
   h('a',{href:'/collections/all',class:'js-link'},'Continue shopping'));
  if(waiting)setTimeout(()=>order(number,polls+1),4000);
 }

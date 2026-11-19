@@ -42,7 +42,7 @@ test('staff see a paid order, fulfil it and the customer email is queued',async(
  await page.goto('/admin');await nav(page,'Orders');await page.getByLabel('Search order, name, email or phone').fill(order.order.number);await page.getByRole('button',{name:'Apply filters'}).click();
  await page.getByRole('row',{name:new RegExp(order.order.number)}).getByRole('button',{name:'View'}).click();
  await expect(page.getByRole('heading',{name:'Order '+order.order.number})).toBeVisible();await expect(page.getByText(/callback · verified · paid/)).toBeVisible();await axe(page,'order detail');
- await page.getByLabel('Tracking number (optional)').fill('MY-E2E-1');await page.getByRole('button',{name:'Mark as fulfilled'}).click();
+ await page.getByRole('combobox',{name:/^Carrier/}).selectOption('Pos Laju');await page.getByLabel('Tracking number').fill('MY-E2E-1');await page.getByRole('button',{name:'Mark as fulfilled'}).click();
  await expect(page.getByText('Order marked as fulfilled.')).toBeVisible();await expect(page.getByText(/is on its way/)).toBeVisible();
  g.check();
 });

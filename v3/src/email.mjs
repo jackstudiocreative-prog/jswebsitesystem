@@ -9,7 +9,7 @@ function render(kind,order,lines,extra={}){
  const address=[order.customer_name,order.address_line1,order.address_line2,`${order.postcode} ${order.city}`,`${order.state}, Malaysia`].filter(Boolean).join('\n');
  const sign='\n\nThank you for choosing Jack Studio.\nFrom everyday essentials to every journey.';
  if(kind==='order_paid')return {subject:`Your Jack Studio order ${order.number} is confirmed`,body:`Hi ${order.customer_name},\n\nWe have received your payment for order ${order.number}. We are preparing your items.\n\n${items}\n\n${totals}\n\nDelivering to:\n${address}${sign}`};
- if(kind==='order_fulfilled')return {subject:`Your Jack Studio order ${order.number} is on its way`,body:`Hi ${order.customer_name},\n\nYour order ${order.number} has been shipped.${order.tracking_number?`\nTracking number: ${order.tracking_number}`:''}\n\n${items}\n\nDelivering to:\n${address}${sign}`};
+ if(kind==='order_fulfilled')return {subject:`Your Jack Studio order ${order.number} is on its way`,body:`Hi ${order.customer_name},\n\nYour order ${order.number} has been shipped.${order.tracking_carrier?`\nCarrier: ${order.tracking_carrier}`:''}${order.tracking_number?`\nTracking number: ${order.tracking_number}`:''}${order.tracking_url?`\nTrack your parcel: ${order.tracking_url}`:''}\n\n${items}\n\nDelivering to:\n${address}${sign}`};
  return {subject:`Refund for your Jack Studio order ${order.number}`,body:`Hi ${order.customer_name},\n\nWe have refunded ${money(extra.amount_minor)} for order ${order.number} to your original payment method. Banks may take several working days to show it.\n\n${totals}\nRefunded so far: ${money(order.refunded_minor)}${sign}`};
 }
 // One message per event: the same order confirmation or shipping notice is never queued twice (e.g. a

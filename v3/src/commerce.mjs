@@ -105,7 +105,7 @@ async function newPayment(db,order,payments){
  const payment=(await db.query('INSERT INTO payments(order_id,provider,payment_ref,amount_minor) VALUES ($1,$2,$3,$4) RETURNING *',[order.id,payments.provider,`${order.number}P${n}`,order.total_minor])).rows[0];
  return payment;
 }
-const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,discount_minor:o.discount_minor??0,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,personalization:l.personalization??null,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
+const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,discount_minor:o.discount_minor??0,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,tracking_carrier:o.tracking_carrier??'',tracking_url:o.tracking_url??'',expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,personalization:l.personalization??null,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
 // Releases stock for unpaid orders past their reservation. Orders with a recent pending (e.g. FPX
 // bank-pending) payment are kept for up to 24 hours while the bank confirms.
 export async function sweepExpired(db,limit=20){
@@ -123,6 +123,7 @@ async function release(db,orderId,status,actor=null){
  for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:l.quantity,reason:'sale_released',note:`${order.number} ${status}`,actor,orderId});
  for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
  await discounts.release(db,orderId);
+ if(status==='expired')await orderAudit(db,null,'expired',orderId,'Payment time ended; stock released');
  return order;
 }
 export async function checkout(db,input,payments,custIp){
@@ -210,6 +211,7 @@ export async function gatewayMessage(db,source,fields,payments){
  if(msg.orderNumber&&msg.orderNumber!==order.number){await event(payment.id,'rejected_order');return {ok:false};}
  if(msg.amount!==amount(payment.amount_minor)||msg.currency!=='MYR'){await event(payment.id,'rejected_amount');await flag(`Gateway reported ${msg.currency} ${msg.amount} for ${payment.payment_ref}; expected MYR ${amount(payment.amount_minor)}.`);return {ok:false,number:order.number};}
  if(payment.status==='succeeded'){await event(payment.id,'duplicate');return {ok:true,number:order.number};}
+ if(msg.pymtMethod&&await hasColumn(db,'payments','pymt_method'))await db.query('UPDATE payments SET pymt_method=$2 WHERE id=$1',[payment.id,msg.pymtMethod]);
  if(msg.txnStatus==='0'){
   await db.query("UPDATE payments SET status='succeeded',provider_txn_id=$2,auth_code=$3,updated_at=now() WHERE id=$1",[payment.id,msg.txnId,msg.authCode]);
   if(order.status==='paid'){await event(payment.id,'duplicate_payment');await flag(`Second successful payment ${payment.payment_ref} received; refund one payment.`);return {ok:true,number:order.number};}
@@ -221,11 +223,12 @@ export async function gatewayMessage(db,source,fields,payments){
    if(!short.length)for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:`${order.number} paid late`,orderId:order.id});
    for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
    if(short.length)await flag(`Paid after the order ${order.status}; not enough stock for ${short.join(', ')}. Restock or refund.`);
-   // The customer paid the discounted price, so the discount counts as used again (even past its limit).
+   // The customer paid the discounted price, so the discount counts as used again (capped at its limit).
    await discounts.reclaim(db,order.id);
   }
   await db.query("UPDATE orders SET status='paid',paid_at=now(),cancelled_at=NULL,revision=revision+1,updated_at=now() WHERE id=$1",[order.id]);
   await queueEmail(db,order.id,'order_paid');
+  await orderAudit(db,null,'paid',order.id,`${payment.payment_ref} confirmed by eGHL (${source})`);
   await event(payment.id,'paid');return {ok:true,number:order.number};
  }
  const next=msg.txnStatus==='2'?'pending':'failed';
@@ -257,7 +260,10 @@ export async function orderDetail(db,id){
  const q=(sql)=>db.query(sql,[o.id]).then(r=>r.rows);
  return {...order,id:String(o.id),lines:await q('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id'),payments:await q('SELECT id,provider,payment_ref,amount_minor,status,provider_txn_id,auth_code,created_at,updated_at FROM payments WHERE order_id=$1 ORDER BY id'),
   events:await q('SELECT e.source,e.verified,e.txn_status,e.outcome,e.received_at,p.payment_ref FROM payment_events e JOIN payments p ON p.id=e.payment_id WHERE p.order_id=$1 ORDER BY e.id'),
-  refunds:await q('SELECT r.amount_minor,r.reference,r.note,r.restocked,r.created_at,r.actor,s.role AS actor_role FROM refunds r LEFT JOIN staff s ON s.subject=r.actor WHERE r.order_id=$1 ORDER BY r.id'),
+  refunds:await q(`SELECT r.amount_minor,r.reference,r.note,r.restocked,r.created_at,r.actor,s.role AS actor_role${await hasColumn(db,'refunds','method')?',r.method':",'recorded' AS method"} FROM refunds r LEFT JOIN staff s ON s.subject=r.actor WHERE r.order_id=$1 ORDER BY r.id`),
+  gateway_refunds:await hasColumn(db,'refunds','method')?await q('SELECT id::text,amount_minor,status,restock,note,gateway_txn_id,message,created_at,updated_at FROM gateway_refunds WHERE order_id=$1 ORDER BY id'):[],
+  activity:await hasColumn(db,'order_activity','action')?await q('SELECT a.action,a.detail,a.created_at,a.actor,s.role AS actor_role FROM order_activity a LEFT JOIN staff s ON s.subject=a.actor WHERE a.order_id=$1 ORDER BY a.id'):[],
+  aftersales:await hasColumn(db,'refunds','method'),
   discounts:await discounts.orderDiscounts(db,o.id),
   stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id'),
   emails:await q('SELECT kind,recipient,subject,status,created_at,sent_at FROM email_outbox WHERE order_id=$1 ORDER BY id')};
@@ -266,45 +272,96 @@ async function lockedOrder(db,id,revision){
  const o=(await db.query('SELECT * FROM orders WHERE id=$1 FOR UPDATE',[key(id)])).rows[0];if(!o)throw new HttpError(404,'Order not found');
  if(revision!==o.revision)throw new HttpError(409,'Order changed. Reload before continuing.');return o;
 }
-const orderAudit=(db,actor,action,id)=>db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,$2,'orders',$3)",[actor,action,id]);
+// Returns to stock the units this order still holds (net of reservation, release and earlier returns),
+// so calling it twice, or after a late payment with no stock, never adds stock that was not taken.
+export async function restockOrder(db,o,actor,why){
+ const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
+ let units=0;
+ for(const l of lines){
+  const net=Number((await db.query("SELECT coalesce(sum(delta),0) AS n FROM inventory_adjustments WHERE order_id=$1 AND variant_id=$2 AND reason IN ('sale','sale_released','returned')",[o.id,l.variant_id])).rows[0].n);
+  if(net<0){await adjustStock(db,{variantId:l.variant_id,delta:-net,reason:'returned',note:`${o.number} ${why}`,actor,orderId:o.id});units-=net;}
+ }
+ for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
+ return units;
+}
+// Gateway refunds sent but not yet confirmed (or unclear) hold back that amount from further refunds.
+export async function refundInFlight(db,orderId){
+ if(!await hasColumn(db,'refunds','method'))return 0;
+ return Number((await db.query("SELECT coalesce(sum(amount_minor),0) AS n FROM gateway_refunds WHERE order_id=$1 AND status IN ('pending','unknown')",[orderId])).rows[0].n);
+}
+export {lockedOrder,lockProducts};
+// Who did what to an order: the staff audit log, plus the order's own activity list (shown to staff).
+// detail is short and never holds secrets or full customer data. actor null = the system.
+export async function orderAudit(db,actor,action,id,detail=''){
+ if(actor)await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) VALUES ($1,$2,'orders',$3)",[actor,action,id]);
+ if(await hasColumn(db,'order_activity','action'))await db.query('INSERT INTO order_activity(order_id,actor,action,detail) VALUES ($1,$2,$3,$4)',[id,actor,action,String(detail).slice(0,300)]);
+}
+// Carriers staff can pick when shipping (free text is allowed too).
+export const CARRIERS=['J&T Express','Pos Laju','Ninja Van','DHL eCommerce','City-Link Express','GDex','Lalamove','Self pickup'];
+function shipment(input,need){
+ const number=String(input.tracking_number??'').trim();if(number.length>80)bad('Tracking number too long');
+ const carrier=String(input.tracking_carrier??'').trim();if(carrier.length>60)bad('Carrier name too long');
+ const url=String(input.tracking_url??'').trim();if(url&&(!/^https:\/\/[^\s]+$/.test(url)||url.length>300))bad('Tracking link must start with https://');
+ if(need&&!number&&!url)bad('Enter a tracking number or link');
+ return {number,carrier,url};
+}
 export async function orderAction(db,id,action,input,actor){
  if(!input||typeof input!=='object')bad('Object required');
- const o=await lockedOrder(db,id,input.revision);
+ const o=await lockedOrder(db,id,input.revision);let detail='',audited=action;
+ const aftersales=await hasColumn(db,'orders','return_status');
  if(action==='fulfil'){
   if(o.needs_attention)throw new HttpError(409,'Resolve the payment or stock issue before fulfilment.');
   if(o.status!=='paid'||o.fulfillment_status==='fulfilled')bad('Only paid, unfulfilled orders can be marked fulfilled');
-  const tracking=String(input.tracking_number??'').trim();if(tracking.length>80)bad('Tracking number too long');
-  await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,tracking]);
+  const t=shipment(input,false);
+  if(aftersales)await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,tracking_carrier=$3,tracking_url=$4,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,t.number,t.carrier,t.url]);
+  else await db.query("UPDATE orders SET fulfillment_status='fulfilled',tracking_number=$2,fulfilled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,t.number]);
+  detail=[t.carrier,t.number].filter(Boolean).join(' ');
   await queueEmail(db,o.id,'order_fulfilled');
+ }else if(action==='tracking'){
+  // Correct the carrier or tracking after shipping. The customer is not emailed again.
+  if(!aftersales)throw new HttpError(503,'Tracking edits need database migration 013.');
+  if(o.fulfillment_status!=='fulfilled')bad('Mark the order as fulfilled first');
+  const t=shipment(input,true);
+  await db.query('UPDATE orders SET tracking_number=$2,tracking_carrier=$3,tracking_url=$4,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,t.number,t.carrier,t.url]);
+  detail=`was ${[o.tracking_carrier,o.tracking_number].filter(Boolean).join(' ')||'empty'}; now ${[t.carrier,t.number].filter(Boolean).join(' ')}`;
  }else if(action==='cancel'){
   if(o.status!=='pending_payment')bad('Only unpaid orders can be cancelled. Record a refund for paid orders.');
   if((await db.query("SELECT 1 FROM payments WHERE order_id=$1 AND status IN ('pending','succeeded')",[o.id])).rows.length)throw new HttpError(409,'A payment for this order is in progress. Wait for the gateway result.');
   await release(db,o.id,'cancelled',actor);
  }else if(action==='refunds'){
-  // Refunds are processed in the eGHL merchant portal; this records them and can restock once.
+  // A refund staff already made in the eGHL merchant portal, recorded here (no money moves from here).
   if(o.status!=='paid')bad('Only paid orders can be refunded');
-  const value=input.amount_minor;if(!Number.isInteger(value)||value<1||value>o.total_minor-o.refunded_minor)bad('Refund must be between RM 0.01 and the amount not yet refunded');
+  const value=input.amount_minor;if(!Number.isInteger(value)||value<1||value>o.total_minor-o.refunded_minor-await refundInFlight(db,o.id))bad('Refund must be between RM 0.01 and the amount not yet refunded (including refunds still waiting for eGHL)');
   const reference=str(input.reference,'eGHL refund reference',1,80),note=String(input.note??'').trim().slice(0,500),restock=input.restock===true;
   if(restock&&(await db.query('SELECT 1 FROM refunds WHERE order_id=$1 AND restocked',[o.id])).rows.length)bad('Items for this order were already restocked');
   const refund=(await db.query('INSERT INTO refunds(order_id,amount_minor,reference,note,restocked,actor) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',[o.id,value,reference,note,restock,actor])).rows[0];
-  if(restock){
-   const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
-   for(const l of lines){
-    // A late paid order with insufficient stock has no reservation to return. Older versions
-    // could also reserve only some lines. Return only the net units actually taken for this order.
-    const net=Number((await db.query("SELECT coalesce(sum(delta),0) AS n FROM inventory_adjustments WHERE order_id=$1 AND variant_id=$2 AND reason IN ('sale','sale_released','returned')",[o.id,l.variant_id])).rows[0].n);
-    if(net<0)await adjustStock(db,{variantId:l.variant_id,delta:-net,reason:'returned',note:`${o.number} refund ${reference}`,actor,orderId:o.id});
-   }
-   for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
-  }
+  if(restock)await restockOrder(db,o,actor,`refund ${reference}`);
   await db.query('UPDATE orders SET refunded_minor=refunded_minor+$2,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,value]);
   await queueEmail(db,o.id,'order_refunded',{amount_minor:value,refund_id:String(refund.id)});
+  audited='refund_recorded';detail=`${amount(value)} MYR · ref ${reference}${restock?' · restocked':''}`;
+ }else if(action==='return'){
+  // Return of a paid, shipped order: requested → received (optionally back to stock) → closed.
+  // Money is handled separately with a refund.
+  if(!aftersales)throw new HttpError(503,'Returns need database migration 013.');
+  if(o.status!=='paid'||o.fulfillment_status!=='fulfilled')bad('Only shipped orders can be returned');
+  const step=input.step,note=String(input.note??'').trim().slice(0,500);
+  const next={request:['none','requested'],receive:['requested','received'],close:['received','closed']}[step];
+  if(!next)bad('Invalid return step');
+  if(o.return_status!==next[0])throw new HttpError(409,`The return is ${o.return_status==='none'?'not started':o.return_status}; reload the order.`);
+  let units=0;
+  if(step==='receive'&&input.restock===true){
+   if((await db.query('SELECT 1 FROM refunds WHERE order_id=$1 AND restocked',[o.id])).rows.length)bad('Items for this order were already restocked with a refund');
+   units=await restockOrder(db,o,actor,'return received');
+  }
+  await db.query(`UPDATE orders SET return_status=$2,return_note=CASE WHEN $3='' THEN return_note ELSE left(trim(return_note||' '||$3),500) END${step==='receive'?',returned_at=now()':''},revision=revision+1,updated_at=now() WHERE id=$1`,[o.id,next[1],note]);
+  audited='return_'+next[1];detail=[note,units?`${units} unit${units===1?'':'s'} back to stock`:''].filter(Boolean).join(' · ');
  }else if(action==='resolve'){
   if(!o.needs_attention)bad('Nothing to resolve');
   const note=str(input.note,'Resolution note',1,300);
   await db.query("UPDATE orders SET needs_attention=false,attention_note=trim(attention_note||' Resolved: '||$2),revision=revision+1,updated_at=now() WHERE id=$1",[o.id,note]);
+  detail=note;
  }else throw new HttpError(404,'Not found');
- await orderAudit(db,actor,action==='refunds'?'refund':action,o.id);
+ await orderAudit(db,actor,audited,o.id,detail);
  return orderDetail(db,o.id);
 }
 // Customers are derived from paid orders until the JS Membership integration is defined.

@@ -2,6 +2,7 @@ import {timingSafeEqual} from 'node:crypto';
 import {HttpError} from './auth.mjs';
 import {sweepExpired,EXPIRABLE} from './commerce.mjs';
 import {sendPending,mailerFromEnv} from './mailer.mjs';
+import {reconcilePayments} from './aftersales.mjs';
 
 // An external scheduler must call the Staging endpoint. Vercel Cron targets Production only.
 // No background timer: a whole bounded batch commits before the response is sent.
@@ -11,11 +12,14 @@ export function authorizeMaintenance(authorization,secret){
  const expected=Buffer.from('Bearer '+secret),actual=Buffer.from(String(authorization??''));
  if(actual.length!==expected.length||!timingSafeEqual(actual,expected))throw new HttpError(401,'Maintenance authorization required');
 }
-export async function runMaintenance(db,mailer=mailerFromEnv()){
+export async function runMaintenance(db,mailer=mailerFromEnv(),payments=null){
+ // Ask the gateway about unconfirmed payments first, so a payment whose callback was missed is
+ // marked paid before its reservation would be released.
+ const payments_checked=await reconcilePayments(db,payments,{limit:3});
  const expired=await sweepExpired(db,EXPIRY_BATCH);
  // Email: send what is due (skipped, and reported, while no provider is configured).
  const email=await sendPending(db,mailer,{limit:20});
  await db.query("DELETE FROM rate_limits WHERE window_start<now()-interval '1 day'");
  const backlog=(await db.query("SELECT count(*)::int AS n,min(expires_at) AS oldest_due_at FROM orders o WHERE "+EXPIRABLE)).rows[0];
- return {expired,more:backlog.n>0,due:backlog.n,oldest_due_at:backlog.oldest_due_at,email};
+ return {expired,more:backlog.n>0,due:backlog.n,oldest_due_at:backlog.oldest_due_at,email,payments_checked};
 }

@@ -16,6 +16,7 @@ import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
 import { sitemap,robots } from './seo.mjs';
 import { authorizeMaintenance,runMaintenance } from './maintenance.mjs';
+import { checkPayment,prepareGatewayRefund,finishGatewayRefund,settleGatewayRefund } from './aftersales.mjs';
 async function readBody(req){
  let body;
  if(req.body!==undefined){
@@ -38,6 +39,11 @@ async function readBody(req){
 const isJson=req=>req.headers['content-type']?.split(';')[0].trim().toLowerCase()==='application/json';
 function formFields(params){const fields={};for(const [k,v] of params){if(Object.hasOwn(fields,k))throw new HttpError(400,'Duplicate form field');Object.defineProperty(fields,k,{value:v,enumerable:true});}return fields;}
 const clientIp=req=>{const ip=String(req.headers['x-forwarded-for']??'').split(',')[0].trim()||req.socket?.remoteAddress||'';return /^[0-9a-fA-F:.]{3,45}$/.test(ip)?ip:'0.0.0.0';};
+// What the configured gateway can do, for the order screen (no secrets).
+function gatewayInfo(options){
+ try{const g=options.payments??paymentAdapter(process.env);return {provider:g.provider,can_query:!!g.canQuery,refunds_enabled:!!g.refundsEnabled,refunds_disabled_reason:g.refundsDisabledReason??null};}
+ catch(e){return {provider:null,can_query:false,refunds_enabled:false,refunds_disabled_reason:'Payments are not configured on this server.'};}
+}
 export function handler(pool,verify,options={}){return async(req,res)=>{
  res.setHeader('Content-Type','application/json');res.setHeader('Cache-Control','no-store');res.setHeader('X-Content-Type-Options','nosniff');
  let db;
@@ -47,7 +53,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   if(path==='/api/v3/maintenance/expire-orders'){
    if(req.method!=='POST')throw new HttpError(405,'Method not available');
    authorizeMaintenance(req.headers.authorization,options.maintenanceSecret??process.env.MAINTENANCE_SECRET);
-   db=await pool.connect();await db.query('BEGIN');const result=await runMaintenance(db,options.mailer??mailerFromEnv());await db.query('COMMIT');res.end(JSON.stringify(result));return;
+   db=await pool.connect();await db.query('BEGIN');let gw=null;try{gw=options.payments??paymentAdapter(process.env);}catch{}const result=await runMaintenance(db,options.mailer??mailerFromEnv(),gw);await db.query('COMMIT');res.end(JSON.stringify(result));return;
   }
   if((path==='/sitemap.xml'||path==='/robots.txt')&&req.method==='GET'){
    const base=process.env.PUBLIC_BASE_URL??options.baseUrl??'';
@@ -115,7 +121,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(gw[2]==='callback'){res.setHeader('Content-Type','text/plain');res.statusCode=r.ok?200:400;res.end(r.ok?'OK':'REJECTED');return;}
    res.statusCode=303;res.setHeader('Location',r.number?'/order/'+r.number:'/order/');res.end('{}');return;
   }
-  const sales=path.match(/^\/api\/v3\/(orders|customers)(?:\/([1-9]\d{0,17})(?:\/(fulfil|cancel|refunds|resolve))?)?$/);
+  const sales=path.match(/^\/api\/v3\/(orders|customers)(?:\/([1-9]\d{0,17})(?:\/(fulfil|cancel|refunds|resolve|tracking|return|check-payment|gateway-refunds(?:\/([1-9]\d{0,17})\/settle)?))?)?$/);
   if(sales&&!(sales[1]==='customers'?(!sales[2]&&req.method==='GET'):sales[3]?req.method==='POST':req.method==='GET'))throw new HttpError(405,'Method not available');
   const page=path.match(/^\/api\/v3\/pages(?:\/(preview)|\/([1-9]\d{0,17})(?:\/(preview|publish|unpublish|revisions\/([1-9]\d{0,17})\/restore))?)?$/);
   // page[1]: unsaved preview; page[2]: page id; page[3]: action; page[4]: version id.
@@ -154,7 +160,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    result=opsKind==='discounts'?await saveDiscount(db,ops[2],input,claims.sub):ops[5]?await sendPending(db,options.mailer??mailerFromEnv(),{limit:20}):await retryEmail(db,ops[6]);
    if(req.method==='POST'&&opsKind==='discounts')res.statusCode=201;
   }
-  else if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?await orderDetail(db,sales[2]):await listOrders(db,url.searchParams);
+  else if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?{...await orderDetail(db,sales[2]),gateway:gatewayInfo(options)}:await listOrders(db,url.searchParams);
   else if(req.method==='GET'&&mediaImport)result=await importStatus(db);
   else if(req.method==='GET'&&theme)result=themeAction==='preview'?await previewTheme(db,theme[2],options.cloud??cloudAdapter(),url.searchParams.get('page')??'home'):theme[2]?await themeDetail(db,theme[2]):await listThemes(db);
   else if(req.method==='GET'&&page)result=action==='preview'?await previewPage(db,page[2],url.searchParams.get('source'),options.cloud??cloudAdapter()):page[2]?await pageDetail(db,page[2]):await listPages(db,url.searchParams);
@@ -168,7 +174,22 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    if(!isJson(req))throw new HttpError(415,'JSON required');
    const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
-   if(sales){result=await orderAction(db,sales[2],sales[3],input,claims.sub);}
+   if(sales){
+    const act=sales[3]?.startsWith('gateway-refunds/')?'settle':sales[3];
+    if(act==='check-payment')result=await checkPayment(db,sales[2],input,options.payments??paymentAdapter(process.env),claims.sub);
+    else if(act==='settle')result=await settleGatewayRefund(db,sales[2],sales[4],input,claims.sub);
+    else if(act==='gateway-refunds'){
+     // The request is committed before eGHL is called, and the answer recorded in a second transaction.
+     const payments=options.payments??paymentAdapter(process.env);
+     const {gr,payment}=await prepareGatewayRefund(db,sales[2],input,payments,claims.sub);
+     await db.query('COMMIT');
+     let r;try{r=await payments.refund(payment,gr.amount_minor);}catch(e){r={status:'unknown',txnId:null,message:'Refund request failed: '+String(e.message).slice(0,150)+'. Check the eGHL merchant portal.'};}
+     await db.query('BEGIN');await finishGatewayRefund(db,gr.id,r,claims.sub);
+     result={...await orderDetail(db,sales[2]),refund_result:r.status,refund_message:r.message??''};
+    }
+    else result=await orderAction(db,sales[2],sales[3],input,claims.sub);
+    if(sales[2]&&result&&!result.gateway)result.gateway=gatewayInfo(options);
+   }
    else if(theme){result=themeAction==='links'?await themeLinkCheck(db,input):themeAction==='pages-preview'?await previewThemePages(db,input,options.cloud??cloudAdapter()):themeAction==='draft-preview'?await previewThemeDraft(db,input,options.cloud??cloudAdapter()):!theme[2]?await createTheme(db,input,claims.sub):!themeAction?await saveTheme(db,theme[2],input,claims.sub):themeAction==='publish'?await publishTheme(db,theme[2],input,claims.sub):themeAction==='autofill'?await autofillTheme(db,theme[2],input,claims.sub):await archiveTheme(db,theme[2],input,claims.sub);res.statusCode=theme[2]||themeAction==='draft-preview'||themeAction==='pages-preview'?200:201;}
    else if(mediaImport)result=await importShopify(db,claims.sub,input,options.cloud??cloudAdapter());
    else if(catalogImport)result=await importCatalog(db,claims.sub,input,options.cloud??cloudAdapter(),options.storeJson,options.importBudget==null?undefined:{budget:options.importBudget});
