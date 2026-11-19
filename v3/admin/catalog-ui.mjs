@@ -6,6 +6,7 @@ import {createThemes} from './theme-ui.mjs';
 import {moneyToMinor,formatPrice} from './money.mjs';
 import {createOrders} from './orders-ui.mjs';
 import {createOps} from './ops-ui.mjs';
+import {createCustomers} from './customers-ui.mjs';
 export {moneyToMinor,formatPrice};
 // Page titles, where each page sits in the navigation, and what it is for (one line, no marketing copy).
 const PAGES={
@@ -14,7 +15,7 @@ const PAGES={
  Products:{title:'Products',about:'Everything you sell. Customers see a product when it is Active and in at least one active collection.'},
  Collections:{title:'Collections',parent:'Products',about:'Groups of products. Active collections appear in the store; their product order is the “Featured” sort.'},
  Inventory:{title:'Inventory',parent:'Products',about:'Stock for every variant. Each change is recorded with a reason.'},
- Customers:{title:'Customers',about:'People who have placed orders, built from their orders.'},
+ Customers:{title:'Customers',about:'Customers imported from Shopify and people who ordered here. Staff records, not shopper accounts.'},
  Discounts:{title:'Discounts',about:'Discount codes and automatic discounts. Amounts are always worked out on the server.'},
  Analytics:{title:'Analytics',about:'Sales, refunds, best sellers and stock for a date range, in Malaysia time.'},
  'Media Library':{title:'Media',about:'Product and page images. Originals stay private; the store shows resized copies of published images only.'},
@@ -322,11 +323,12 @@ export function mountAdmin(api,role,notify,account={}){
  const website=createWebsite({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,all,thumb,previews,mediaPicker,navigate,setDirty:v=>{dirty=v;},ticket:()=>++generation,current:t=>t===generation});
  const themes=createThemes({api,root,notify,readOnly,el,button,field,select,header,empty,all,thumb,previews,mediaPicker,navigate,setDirty:v=>{dirty=v;},ticket:()=>++generation,current:t=>t===generation});
  const sales=createOrders({api,root,notify,readOnly,el,button,field,select,header,table,cell,empty,navigate:v=>navigate(v,true),ticket:()=>++generation,current:t=>t===generation});
+ const people=createCustomers({api,root,notify,readOnly,el,button,field,select,header,navigate,current:t=>t===generation,ticket:()=>++generation});
  const ops=createOps({api,root,notify,readOnly,el,button,field,select,all,navigate,setDirty:v=>{dirty=v;},current:t=>t===generation});
  async function render(){
   const ticket=++generation;upload.hidden=view!=='Media Library';header(view,'');
   if(view==='Orders'){await sales.orders(ticket);return;}
-  if(view==='Customers'){await sales.customers(ticket);return;}
+  if(view==='Customers'){await people.list(ticket);return;}
   if(view==='Settings'){await sales.settings(ticket);await ops.email(ticket);return;}
   if(view==='Discounts'){await ops.discounts(ticket);return;}
   if(view==='Analytics'){await ops.analytics(ticket);return;}
