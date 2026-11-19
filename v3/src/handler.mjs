@@ -18,6 +18,7 @@ import { sitemap,robots } from './seo.mjs';
 import { authorizeMaintenance,runMaintenance } from './maintenance.mjs';
 import { importCustomers,listCustomers as customerList,customerDetail } from './customers.mjs';
 import { checkPayment,prepareGatewayRefund,finishGatewayRefund,settleGatewayRefund } from './aftersales.mjs';
+import { posClientFromEnv,syncOptions,syncFromPos } from './pos-stock.mjs';
 async function readBody(req){
  let body;
  if(req.body!==undefined){
@@ -146,8 +147,11 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   const catalogImport=path==='/api/v3/catalog/import';
   if(catalogImport&&req.method!=='POST')throw new HttpError(405,'Method not available');
   if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
-  const match=people||page||sales||theme||mediaImport||catalogImport||ops?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
-  if(!match&&!people&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport&&!ops)throw new HttpError(404,'Not found');
+  // Stock from the shop POS (mPOS): {dry_run:true} previews, otherwise applies (src/pos-stock.mjs).
+  const posSync=path==='/api/v3/inventory/pos-sync';
+  if(posSync&&req.method!=='POST')throw new HttpError(405,'Method not available');
+  const match=people||page||sales||theme||mediaImport||catalogImport||ops||posSync?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
+  if(!match&&!people&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport&&!ops&&!posSync)throw new HttpError(404,'Not found');
   if(match){
   if((['media/previews','inventory'].includes(match[1])&&(req.method!=='GET'||match[2]))||(match[1]==='inventory/adjustments'&&(!['GET','POST'].includes(req.method)||match[2])))throw new HttpError(405,'Method not available');
   if(!['GET','POST','PATCH'].includes(req.method) || (['media','session','dashboard'].includes(match[1])&&req.method!=='GET') || (match[1].startsWith('uploads/')&&(req.method!=='POST'||match[2])) || (req.method==='PATCH'&&!match[2]) || (req.method==='POST'&&match[2]) || (match[2]&&['session','dashboard'].includes(match[1])) || (match[3]&&match[1]!=='media') || (match[1]==='media'&&match[2]&&!match[3]))throw new HttpError(405,'Method not available');
@@ -181,6 +185,15 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
    const body=await readBody(req);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
    if(people)result=await importCustomers(db,input,claims.sub);
+   else if(posSync){
+    const opts=syncOptions(input),pos=options.pos??posClientFromEnv();
+    if(!pos)throw new HttpError(503,'POS sync is not set up. Add MPOS_API_KEY to the server environment in Vercel.');
+    // No transaction is held open while mPOS answers; stock is read and written in a new one.
+    await db.query('COMMIT');
+    const feed=await pos.fetchStock();
+    await db.query('BEGIN');
+    result=await syncFromPos(db,feed,opts,claims.sub);
+   }
    else if(sales){
     const act=sales[3]?.startsWith('gateway-refunds/')?'settle':sales[3];
     if(act==='check-payment')result=await checkPayment(db,sales[2],input,options.payments??paymentAdapter(process.env),claims.sub);
