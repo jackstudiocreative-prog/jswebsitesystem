@@ -50,6 +50,11 @@ export async function productCards(db,where='',params=[],{order='p.id DESC',limi
  return rows.map(p=>card(p,media));
 }
 
+// Option names are compared case-insensitively, and spelling variants count as one filter
+// (imported products use both "Color" and "Colour").
+const OPTION_ALIASES={colour:'color',colours:'color',colors:'color',sizes:'size'};
+const optName=sqlExpr=>`(CASE lower(${sqlExpr}) ${Object.entries(OPTION_ALIASES).map(([a,b])=>`WHEN '${a}' THEN '${b}'`).join(' ')} ELSE lower(${sqlExpr}) END)`;
+const OPTION_LABELS={color:'Colour',size:'Size'};
 // Filters shared by collection pages and search: in stock, price range (RM), and option values
 // (e.g. option.color=Brown&option.color=Black). Each filter must match one active variant.
 function filterSql(params,add){
@@ -59,18 +64,18 @@ function filterSql(params,add){
  const min=rm('price_min'),max=rm('price_max');
  if(min!=null||max!=null)parts.push(`EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND v.price_minor>=${add(min??0)} AND v.price_minor<=${add(max??100000000)})`);
  const options={};
- for(const [k,v] of params){const m=k.match(/^option\.([a-z0-9 _-]{1,40})$/i);if(!m)continue;if(String(v).length>80)throw new HttpError(400,'Invalid filter');(options[m[1].toLowerCase()]??=[]).push(String(v));}
+ for(const [k,v] of params){const m=k.match(/^option\.([a-z0-9 _-]{1,40})$/i);if(!m)continue;if(String(v).length>80)throw new HttpError(400,'Invalid filter');const n=m[1].toLowerCase();(options[OPTION_ALIASES[n]??n]??=[]).push(String(v));}
  if(Object.keys(options).length>5)throw new HttpError(400,'Too many filters');
- for(const [name,values] of Object.entries(options))parts.push(`EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND lower(v.option_values[array_position((SELECT array_agg(lower(x)) FROM unnest(p.option_names) x),${add(name)})])=ANY(${add(values.map(x=>x.toLowerCase()))}::text[]))`);
+ for(const [name,values] of Object.entries(options))parts.push(`EXISTS(SELECT 1 FROM product_variants v WHERE v.product_id=p.id AND v.active AND lower(v.option_values[array_position((SELECT array_agg(${optName('x')}) FROM unnest(p.option_names) x),${add(name)})])=ANY(${add(values.map(x=>x.toLowerCase()))}::text[]))`);
  return {parts,min,max,options,inStock:params.get('available')==='1'};
 }
 // Choices for the filter panel, from the products in the listing before filters are applied.
 async function facets(db,base,args){
  const where=`${LISTED}${base?' AND '+base:''}`;
- const rows=(await db.query(`SELECT lower(o.name) AS name,min(o.name) AS label,v.option_values[o.i] AS value,count(DISTINCT p.id)::int AS n
+ const rows=(await db.query(`SELECT ${optName('o.name')} AS name,min(o.name) AS label,v.option_values[o.i] AS value,count(DISTINCT p.id)::int AS n
   FROM products p CROSS JOIN LATERAL unnest(p.option_names) WITH ORDINALITY AS o(name,i) JOIN product_variants v ON v.product_id=p.id AND v.active
   WHERE ${where} AND v.option_values[o.i] IS NOT NULL GROUP BY 1,3 ORDER BY 1,3`,args)).rows;
- const options=[];for(const r of rows){let o=options.find(x=>x.name===r.name);if(!o)options.push(o={name:r.name,label:r.label.charAt(0).toUpperCase()+r.label.slice(1),values:[]});o.values.push({value:r.value,count:r.n});}
+ const options=[];for(const r of rows){let o=options.find(x=>x.name===r.name);if(!o)options.push(o={name:r.name,label:OPTION_LABELS[r.name]??r.label.charAt(0).toUpperCase()+r.label.slice(1),values:[]});o.values.push({value:r.value,count:r.n});}
  const price=(await db.query(`SELECT min(v.price_minor)::int AS min,max(v.price_minor)::int AS max FROM products p JOIN product_variants v ON v.product_id=p.id AND v.active WHERE ${where}`,args)).rows[0];
  return {options:options.filter(o=>o.values.length>1&&o.values.length<=40),price:{min:price.min??0,max:price.max??0}};
 }

@@ -9,6 +9,9 @@ import { listThemes,themeDetail,createTheme,saveTheme,publishTheme,archiveTheme,
 import { quoteBag,checkout,orderStatus,retryPayment,gatewayMessage,mockComplete,listOrders,orderDetail,orderAction,listCustomers,shippingRates } from './commerce.mjs';
 import { storefrontProduct,storefrontCollection,storefrontIndex,storefrontSearch } from './storefront.mjs';
 import { deliverPublicMedia,CACHE_SECONDS } from './public-media.mjs';
+import { listDiscounts,discountDetail,saveDiscount } from './discounts.mjs';
+import { salesReport } from './reports.mjs';
+import { emailStatus,sendPending,retryEmail,mailerFromEnv } from './mailer.mjs';
 import { paymentAdapter } from './payments.mjs';
 import { limit } from './protect.mjs';
 import { sitemap,robots } from './seo.mjs';
@@ -44,7 +47,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   if(path==='/api/v3/maintenance/expire-orders'){
    if(req.method!=='POST')throw new HttpError(405,'Method not available');
    authorizeMaintenance(req.headers.authorization,options.maintenanceSecret??process.env.MAINTENANCE_SECRET);
-   db=await pool.connect();await db.query('BEGIN');const result=await runMaintenance(db);await db.query('COMMIT');res.end(JSON.stringify(result));return;
+   db=await pool.connect();await db.query('BEGIN');const result=await runMaintenance(db,options.mailer??mailerFromEnv());await db.query('COMMIT');res.end(JSON.stringify(result));return;
   }
   if((path==='/sitemap.xml'||path==='/robots.txt')&&req.method==='GET'){
    const base=process.env.PUBLIC_BASE_URL??options.baseUrl??'';
@@ -122,14 +125,18 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   // theme[1]: unsaved preview; theme[2]: theme id; theme[3]: action.
   const themeAction=theme?.[1]==='preview-pages'?'pages-preview':theme?.[1]==='links'?'links':theme?.[1]?'draft-preview':theme?.[3];
   if(theme&&!(themeAction==='draft-preview'||themeAction==='pages-preview'||themeAction==='links'?['POST']:!theme[2]?['GET','POST']:!themeAction?['GET','PATCH']:themeAction==='preview'?['GET']:['POST']).includes(req.method))throw new HttpError(405,'Method not available');
+  // Operations (batch 4): discounts, sales reports, email outbox.
+  const ops=path.match(/^\/api\/v3\/(?:(discounts)(?:\/([1-9]\d{0,17}))?|(reports)|(email)(?:\/(send)|\/([1-9]\d{0,17})\/(retry))?)$/);
+  const opsKind=ops?.[1]?'discounts':ops?.[3]?'reports':ops?.[4]?'email':null;
+  if(ops){const allowed=opsKind==='discounts'?(ops[2]?['GET','PATCH']:['GET','POST']):opsKind==='reports'?['GET']:(ops[5]||ops[7])?['POST']:['GET'];if(!allowed.includes(req.method))throw new HttpError(405,'Method not available');}
   // Shopify image import: GET lists what is still to import, POST imports one small batch.
   const mediaImport=path==='/api/v3/media/import';
   // Shopify catalogue import (collections, products, memberships), one step per POST.
   const catalogImport=path==='/api/v3/catalog/import';
   if(catalogImport&&req.method!=='POST')throw new HttpError(405,'Method not available');
   if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
-  const match=page||sales||theme||mediaImport||catalogImport?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
-  if(!match&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport)throw new HttpError(404,'Not found');
+  const match=page||sales||theme||mediaImport||catalogImport||ops?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
+  if(!match&&!page&&!sales&&!theme&&!mediaImport&&!catalogImport&&!ops)throw new HttpError(404,'Not found');
   if(match){
   if((['media/previews','inventory'].includes(match[1])&&(req.method!=='GET'||match[2]))||(match[1]==='inventory/adjustments'&&(!['GET','POST'].includes(req.method)||match[2])))throw new HttpError(405,'Method not available');
   if(!['GET','POST','PATCH'].includes(req.method) || (['media','session','dashboard'].includes(match[1])&&req.method!=='GET') || (match[1].startsWith('uploads/')&&(req.method!=='POST'||match[2])) || (req.method==='PATCH'&&!match[2]) || (req.method==='POST'&&match[2]) || (match[2]&&['session','dashboard'].includes(match[1])) || (match[3]&&match[1]!=='media') || (match[1]==='media'&&match[2]&&!match[3]))throw new HttpError(405,'Method not available');
@@ -140,7 +147,14 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   db=await pool.connect();await db.query('BEGIN');
   const staff=await authorize(db,claims,req.method!=='GET');
   let result;
-  if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?await orderDetail(db,sales[2]):await listOrders(db,url.searchParams);
+  if(ops&&req.method==='GET')result=opsKind==='discounts'?(ops[2]?await discountDetail(db,ops[2]):await listDiscounts(db,url.searchParams)):opsKind==='reports'?await salesReport(db,url.searchParams):await emailStatus(db,options.mailer??mailerFromEnv());
+  else if(ops){
+   if(!isJson(req))throw new HttpError(415,'JSON required');
+   let input;try{input=JSON.parse(await readBody(req)||'{}');}catch{throw new HttpError(400,'Invalid JSON');}
+   result=opsKind==='discounts'?await saveDiscount(db,ops[2],input,claims.sub):ops[5]?await sendPending(db,options.mailer??mailerFromEnv(),{limit:20}):await retryEmail(db,ops[6]);
+   if(req.method==='POST'&&opsKind==='discounts')res.statusCode=201;
+  }
+  else if(req.method==='GET'&&sales)result=sales[1]==='customers'?await listCustomers(db,url.searchParams):sales[2]?await orderDetail(db,sales[2]):await listOrders(db,url.searchParams);
   else if(req.method==='GET'&&mediaImport)result=await importStatus(db);
   else if(req.method==='GET'&&theme)result=themeAction==='preview'?await previewTheme(db,theme[2],options.cloud??cloudAdapter(),url.searchParams.get('page')??'home'):theme[2]?await themeDetail(db,theme[2]):await listThemes(db);
   else if(req.method==='GET'&&page)result=action==='preview'?await previewPage(db,page[2],url.searchParams.get('source'),options.cloud??cloudAdapter()):page[2]?await pageDetail(db,page[2]):await listPages(db,url.searchParams);

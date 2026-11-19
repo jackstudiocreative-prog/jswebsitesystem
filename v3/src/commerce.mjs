@@ -5,6 +5,7 @@ import {amount} from './payments.mjs';
 import {queueEmail} from './email.mjs';
 import {publicImage} from './media-urls.mjs';
 import {hasColumn} from './schema.mjs';
+import * as discounts from './discounts.mjs';
 import {normalizeEngraving,engravingError,offersEngraving} from '../shared/personalization.mjs';
 import {MAX_PENDING_PER_EMAIL} from './protect.mjs';
 // Orders and payments. Everything a customer sends is re-priced on the server. Stock is reserved at
@@ -83,8 +84,11 @@ export async function quoteBag(db,input){
  let shipping=null,shippingError=null;
  if(priced.lines.some(l=>l.available===false&&!l.title))shippingError='Remove unavailable items to continue.';
  else try{shipping=await quoteShipping(db,priced.groups);}catch(e){if(!e.status)throw e;shippingError=e.message;}
+ // Discounts: the code (if any) and automatic discounts, computed here; the browser sends only the code.
+ const code=typeof input?.discount_code==='string'?input.discount_code.slice(0,40):'';
+ const d=await discounts.evaluate(db,{lines:priced.lines,subtotal:priced.subtotal,shipping_minor:shipping?.shipping_minor??0,code});
  const images=await lineImages(db,priced.lines.filter(l=>l.title));
- return {lines:priced.lines.map(({in_stock,media_id,...l})=>({...l,image:l.title?images.get(l.variant_id)??null:null,low:in_stock!==undefined&&in_stock<=5})),subtotal_minor:priced.subtotal,shipping_minor:shipping?.shipping_minor??null,shipping_names:shipping?.names??[],shipping_error:shippingError,total_minor:shipping?priced.subtotal+shipping.shipping_minor:null,currency:'MYR'};
+ return {lines:priced.lines.map(({in_stock,media_id,...l})=>({...l,image:l.title?images.get(l.variant_id)??null:null,low:in_stock!==undefined&&in_stock<=5})),subtotal_minor:priced.subtotal,shipping_minor:shipping?.shipping_minor??null,discounts:[d.product,d.shipping].filter(Boolean).map(({id,...x})=>x),discount_minor:d.discount_minor,discount_code:d.code_error?null:discounts.normalizeCode(code)||null,discount_error:d.code_error,total_minor:shipping?priced.subtotal+shipping.shipping_minor-d.discount_minor:null,shipping_names:shipping?.names??[],shipping_error:shippingError,currency:'MYR'};
 }
 function customerInput(c){
  if(!c||typeof c!=='object')bad('Customer details required');
@@ -101,7 +105,7 @@ async function newPayment(db,order,payments){
  const payment=(await db.query('INSERT INTO payments(order_id,provider,payment_ref,amount_minor) VALUES ($1,$2,$3,$4) RETURNING *',[order.id,payments.provider,`${order.number}P${n}`,order.total_minor])).rows[0];
  return payment;
 }
-const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,personalization:l.personalization??null,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
+const publicOrder=(o,lines,payment)=>({number:o.number,status:o.status,fulfillment_status:o.fulfillment_status,customer_name:o.customer_name,city:o.city,state:o.state,subtotal_minor:o.subtotal_minor,shipping_minor:o.shipping_minor,discount_minor:o.discount_minor??0,total_minor:o.total_minor,refunded_minor:o.refunded_minor,shipping_names:o.shipping_names,tracking_number:o.tracking_number,expires_at:o.expires_at,created_at:o.created_at,paid_at:o.paid_at,payment_status:payment?.status??null,lines:lines.map(l=>({title:l.title,variant_title:l.variant_title,personalization:l.personalization??null,quantity:l.quantity,unit_price_minor:l.unit_price_minor,line_total_minor:l.line_total_minor}))});
 // Releases stock for unpaid orders past their reservation. Orders with a recent pending (e.g. FPX
 // bank-pending) payment are kept for up to 24 hours while the bank confirms.
 export async function sweepExpired(db,limit=20){
@@ -118,6 +122,7 @@ async function release(db,orderId,status,actor=null){
  const order=(await db.query("UPDATE orders SET status=$2,cancelled_at=now(),revision=revision+1,updated_at=now() WHERE id=$1 RETURNING *",[orderId,status])).rows[0];
  for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:l.quantity,reason:'sale_released',note:`${order.number} ${status}`,actor,orderId});
  for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
+ await discounts.release(db,orderId);
  return order;
 }
 export async function checkout(db,input,payments,custIp){
@@ -149,9 +154,15 @@ export async function checkout(db,input,payments,custIp){
  const engravingColumn=await hasColumn(db,'order_lines','personalization');
  if(!engravingColumn&&priced.lines.some(l=>l.engraving))throw new HttpError(503,'Engraving cannot be ordered online yet. Remove the engraving or contact us.');
  const shipping=await quoteShipping(db,priced.groups);
+ const code=typeof input.discount_code==='string'?input.discount_code.slice(0,40):'';
+ const disc=await discounts.evaluate(db,{lines:priced.lines,subtotal:priced.subtotal,shipping_minor:shipping.shipping_minor,code,email:customer.email});
+ if(code&&disc.code_error)bad(disc.code_error);
+ const discountColumn=await discounts.available(db);
  const number='JSW'+(await db.query("SELECT nextval('order_number_seq') AS n")).rows[0].n;
- const order=(await db.query(`INSERT INTO orders(number,idempotency_key,access_token_hash,customer_name,email,phone,address_line1,address_line2,city,postcode,state,note,subtotal_minor,shipping_minor,total_minor,shipping_names,expires_at)
-  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()+make_interval(mins=>$17)) RETURNING *`,[number,input.idempotency_key,hash(access),customer.customer_name,customer.email,customer.phone,customer.address_line1,customer.address_line2,customer.city,customer.postcode,customer.state,customer.note,priced.subtotal,shipping.shipping_minor,priced.subtotal+shipping.shipping_minor,shipping.names.join(' · '),RESERVE_MINUTES])).rows[0];
+ const discount=discountColumn?disc.discount_minor:0;
+ const order=(await db.query(`INSERT INTO orders(number,idempotency_key,access_token_hash,customer_name,email,phone,address_line1,address_line2,city,postcode,state,note,subtotal_minor,shipping_minor,total_minor,shipping_names,expires_at${discountColumn?',discount_minor':''})
+  VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,now()+make_interval(mins=>$17)${discountColumn?',$18':''}) RETURNING *`,[number,input.idempotency_key,hash(access),customer.customer_name,customer.email,customer.phone,customer.address_line1,customer.address_line2,customer.city,customer.postcode,customer.state,customer.note,priced.subtotal,shipping.shipping_minor,priced.subtotal+shipping.shipping_minor-discount,shipping.names.join(' · '),RESERVE_MINUTES,...(discountColumn?[discount]:[])])).rows[0];
+ if(discountColumn)await discounts.claim(db,order.id,disc,customer.email);
  await lockProducts(db,priced.lines.map(l=>l.product_id));
  for(const l of priced.lines){
   if(engravingColumn)await db.query('INSERT INTO order_lines(order_id,product_id,variant_id,title,variant_title,sku,unit_price_minor,quantity,line_total_minor,personalization) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)',[order.id,l.product_id,l.variant_id,l.title,l.variant_title,l.sku,l.unit_price_minor,l.quantity,l.line_total_minor,l.engraving]);
@@ -210,6 +221,8 @@ export async function gatewayMessage(db,source,fields,payments){
    if(!short.length)for(const l of lines)await adjustStock(db,{variantId:l.variant_id,delta:-l.quantity,reason:'sale',note:`${order.number} paid late`,orderId:order.id});
    for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
    if(short.length)await flag(`Paid after the order ${order.status}; not enough stock for ${short.join(', ')}. Restock or refund.`);
+   // The customer paid the discounted price, so the discount counts as used again (even past its limit).
+   await discounts.reclaim(db,order.id);
   }
   await db.query("UPDATE orders SET status='paid',paid_at=now(),cancelled_at=NULL,revision=revision+1,updated_at=now() WHERE id=$1",[order.id]);
   await queueEmail(db,order.id,'order_paid');
@@ -245,6 +258,7 @@ export async function orderDetail(db,id){
  return {...order,id:String(o.id),lines:await q('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY id'),payments:await q('SELECT id,provider,payment_ref,amount_minor,status,provider_txn_id,auth_code,created_at,updated_at FROM payments WHERE order_id=$1 ORDER BY id'),
   events:await q('SELECT e.source,e.verified,e.txn_status,e.outcome,e.received_at,p.payment_ref FROM payment_events e JOIN payments p ON p.id=e.payment_id WHERE p.order_id=$1 ORDER BY e.id'),
   refunds:await q('SELECT r.amount_minor,r.reference,r.note,r.restocked,r.created_at,r.actor,s.role AS actor_role FROM refunds r LEFT JOIN staff s ON s.subject=r.actor WHERE r.order_id=$1 ORDER BY r.id'),
+  discounts:await discounts.orderDiscounts(db,o.id),
   stock:await q('SELECT a.reason,a.delta,a.quantity_after,a.created_at,v.sku FROM inventory_adjustments a JOIN product_variants v ON v.id=a.variant_id WHERE a.order_id=$1 ORDER BY a.id'),
   emails:await q('SELECT kind,recipient,subject,status,created_at,sent_at FROM email_outbox WHERE order_id=$1 ORDER BY id')};
 }
@@ -272,7 +286,7 @@ export async function orderAction(db,id,action,input,actor){
   const value=input.amount_minor;if(!Number.isInteger(value)||value<1||value>o.total_minor-o.refunded_minor)bad('Refund must be between RM 0.01 and the amount not yet refunded');
   const reference=str(input.reference,'eGHL refund reference',1,80),note=String(input.note??'').trim().slice(0,500),restock=input.restock===true;
   if(restock&&(await db.query('SELECT 1 FROM refunds WHERE order_id=$1 AND restocked',[o.id])).rows.length)bad('Items for this order were already restocked');
-  await db.query('INSERT INTO refunds(order_id,amount_minor,reference,note,restocked,actor) VALUES ($1,$2,$3,$4,$5,$6)',[o.id,value,reference,note,restock,actor]);
+  const refund=(await db.query('INSERT INTO refunds(order_id,amount_minor,reference,note,restocked,actor) VALUES ($1,$2,$3,$4,$5,$6) RETURNING id',[o.id,value,reference,note,restock,actor])).rows[0];
   if(restock){
    const lines=(await db.query('SELECT * FROM order_lines WHERE order_id=$1 ORDER BY variant_id',[o.id])).rows;await lockProducts(db,lines.map(l=>l.product_id));
    for(const l of lines){
@@ -284,7 +298,7 @@ export async function orderAction(db,id,action,input,actor){
    for(const p of new Set(lines.map(l=>String(l.product_id))))await syncSummary(db,p);
   }
   await db.query('UPDATE orders SET refunded_minor=refunded_minor+$2,revision=revision+1,updated_at=now() WHERE id=$1',[o.id,value]);
-  await queueEmail(db,o.id,'order_refunded',{amount_minor:value});
+  await queueEmail(db,o.id,'order_refunded',{amount_minor:value,refund_id:String(refund.id)});
  }else if(action==='resolve'){
   if(!o.needs_attention)bad('Nothing to resolve');
   const note=str(input.note,'Resolution note',1,300);
