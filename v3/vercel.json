@@ -7,6 +7,10 @@
  "buildCommand":"npm run build",
  "outputDirectory":"public",
  "functions":{"api/index.mjs":{"maxDuration":30}},
+ "redirects":[
+  {"source":"/account","destination":"https://club.jackstudio.com.my/","permanent":false},
+  {"source":"/account/:path*","destination":"https://club.jackstudio.com.my/","permanent":false}
+ ],
  "rewrites":[
   {"source":"/api/v3/:path*","destination":"/api/index"},
   {"source":"/health","destination":"/api/index"},

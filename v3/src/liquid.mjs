@@ -7,6 +7,7 @@ import {SECTIONS,BLOCKS,SNIPPETS,LOCALE,SETTINGS,OUTLETS,VIDEOS} from './liquid-
 import {SECTION_SCHEMAS,BLOCK_SCHEMAS} from '../shared/liquid-theme.mjs';
 import {shopifyKey} from './shopify-import.mjs';
 import {publicMediaUrl,publicSrcset} from './media-urls.mjs';
+import {MEMBER_CLUB_URL} from '../shared/routes.mjs';
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 export const PLACEHOLDER="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='1600' height='1200' viewBox='0 0 4 3'%3E%3Crect width='4' height='3' fill='%23e7e1d3'/%3E%3C/svg%3E";
@@ -70,8 +71,8 @@ export async function loadContext(db,refs,{mediaUrl=null,publicImages=false}={})
  return {img,fileImage,collection};
 }
 
-// Storefront features. Customer accounts are not available yet (batch 4).
-export const FEATURES={customer_accounts:false,search:true,wishlist:true};
+// Storefront features. Customer accounts: the account icon leads to Jack Studio Club (MEMBER_CLUB_URL).
+export const FEATURES={customer_accounts:true,search:true,wishlist:true};
 const FEATURE_SETTINGS={show_account:'customer_accounts',show_search:'search',show_wishlist:'wishlist'};
 // Collects every image and collection referenced by the sections' settings (by schema type).
 export function references(sections){
@@ -148,7 +149,7 @@ function liquid(){
 
 const PAGE_GLOBALS=page=>({
  settings:SETTINGS,shop:{name:'Jack Studio',url:'',metaobjects:{outlet:{values:OUTLETS.map(o=>({...Object.fromEntries(Object.entries(o).map(([k,v])=>[k,{value:v}]))}))}}},
- routes:{root_url:'/',cart_url:'/cart',cart_add_url:'/cart',collections_url:'/pages/product-collection',all_products_collection_url:'/collections/all',search_url:'/search',account_url:'/account',account_login_url:'/account/login'},
+ routes:{root_url:'/',cart_url:'/cart',cart_add_url:'/cart',collections_url:'/pages/product-collection',all_products_collection_url:'/collections/all',search_url:'/search',account_url:MEMBER_CLUB_URL,account_login_url:MEMBER_CLUB_URL},
  request:{locale:{iso_code:'en'},page_type:page.handle==='home'?'index':'page',design_mode:false,path:page.handle==='home'?'/':'/pages/'+page.handle,host:''},template:{name:page.handle==='home'?'index':'page',suffix:page.handle==='home'?null:page.handle},
  page:{title:page.title,content:page.content??'',handle:page.handle,url:'/pages/'+page.handle},cart:{item_count:0,items:[]},customer:null,
 });
@@ -166,7 +167,7 @@ export async function renderPage(db,handle,template,options={}){
   const blocks=(s.block_order??Object.keys(s.blocks??{})).map(id=>({id,...s.blocks[id]})).filter(b=>b.type&&!b.disabled).map(b=>({id:b.id,type:b.type,settings:resolveSettings(blockSchema(s.type,b.type),b.settings,ctx),shopify_attributes:''}));
   const section={id:s.id,settings:resolveSettings(schema,s.settings,ctx),blocks,index:list.indexOf(s)+1};
   // Entry points for features this store does not offer yet are not shown, whatever the imported
-  // theme says (no account sign-in until customer accounts exist; see FEATURES).
+  // theme says (see FEATURES).
   for(const [key,feature] of Object.entries(FEATURE_SETTINGS))if(key in section.settings&&!FEATURES[feature])section.settings[key]=false;
   let out;try{out=await liquid().parseAndRender(SECTIONS[s.type],{...globals,section});}
   catch(e){out=`<!-- section ${esc(s.type)} failed to render -->`;if(options.strict)throw e;}

@@ -61,7 +61,7 @@ test('unknown addresses get a real 404 page with a way back',async({page,request
  await page.goto('/products/does-not-exist');await expect(page.getByRole('heading',{level:1,name:'Product not found'})).toBeVisible();
 });
 
-test('live theme: no links to the blog or account; search and bag icons work',async({page,request})=>{
+test('live theme: no blog links; account goes to Jack Studio Club; search and bag icons work',async({page,request})=>{
  const g=guard(page);
  // Make sure a theme is live (the theme test may not have run yet in this project).
  const auth={headers:{Authorization:'Bearer editor'}};
@@ -70,6 +70,8 @@ test('live theme: no links to the blog or account; search and bag icons work',as
  await page.goto('/');await expect(page.locator('body[data-site-ready]')).toBeAttached();
  const hrefs=await page.locator('a[href]').evaluateAll(a=>a.map(x=>x.getAttribute('href')));
  expect(hrefs.filter(h=>/^\/(blogs|account)(\/|$)/.test(h))).toEqual([]);
+ await expect(page.locator('.jh-right a[aria-label="Account"]')).toHaveAttribute('href','https://club.jackstudio.com.my/');
+ for(const p of ['/account','/account/login'])expect((await request.get(p,{maxRedirects:0})).headers().location).toBe('https://club.jackstudio.com.my/');
  await page.locator('.jh-right a[aria-label="Search"]').click();await expect(page).toHaveURL(/\/search$/);
  await expect(page.getByRole('heading',{level:1,name:'Search'})).toBeVisible();
  g.check();
