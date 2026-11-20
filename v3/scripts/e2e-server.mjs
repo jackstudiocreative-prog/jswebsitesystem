@@ -31,9 +31,11 @@ const payments=testGateway({provider:'mock',serviceId:'JSMOCK',password:'e2e-'.r
 // Stand-in for mPOS GET /api/stock-warehouse, in mPOS's own format: category prefix + model in stockCode,
 // colour apart ("BAG-E2EPOS1" + "A" = website SKU "E2E POS1 A"); two warehouses.
 const posRow=(id,stockCode,colour,warehouseId,qtyAvailable)=>({id,stockCode,colour,size:'',warehouseId,warehouseCode:'W'+warehouseId,warehouseName:warehouseId===1?'HQ -ONLINE STORE':'TOP SHOP - MAIN PLACE',description:'JACK STUDIO B/B',qtyAvailable,isActive:true});
-const posRows=[posRow(1,'BAG-E2EPOS1','A',1,4),posRow(2,'BAG-E2EPOS1','A',2,3),posRow(3,'BAG-E2EPOS1','B',1,5),posRow(4,'BAG-E2EPOS1','C',1,6),posRow(5,'ACC-POSONLY9','A',2,8)];
+const posRows=[posRow(1,'BAG-E2EPOS1','A',1,4),posRow(2,'BAG-E2EPOS1','A',2,3),posRow(3,'BAG-E2EPOS1','B',1,5),posRow(4,'BAG-E2EPOS1','C',1,6),posRow(5,'ACC-POSONLY9','A',2,8),posRow(6,'BAG-E2ENEW1','A',1,2)];
+// Product list for the harness: E2EPOS1 (on the website) and E2ENEW1 (in mPOS, not on the website).
+const posPlan=[['E2EPOS1','BAG','SLING(M)','RM50'],['E2ENEW1','BAG','BACKPACK(M)','RM99']];
 const pos={fetchPage:async(page,pageSize)=>({page,pageSize,totalCount:posRows.length,items:posRows.slice((page-1)*pageSize,page*pageSize)})};
-const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,pos,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id,publicDerivative:(m,w)=>'/theme-assets/virtual-showroom-cover.jpg?id='+m.id+'&w='+w}});
+const api=handler({connect:async()=>({...sql,release(){}})},async token=>{if(!['editor','viewer'].includes(token))throw Error('bad token');return {sub:token,aal:'aal2'};},{payments,rateLimits:false,pos,posPlan,baseUrl:'https://e2e.test',cloud:{preview:m=>'https://api.cloudinary.com/e2e/'+m.id,publicDerivative:(m,w)=>'/theme-assets/virtual-showroom-cover.jpg?id='+m.id+'&w='+w}});
 const adminJs=(await build({entryPoints:[fileURLToPath(new URL('e2e/admin-entry.mjs',root))],bundle:true,format:'esm',write:false})).outputFiles[0].text;
 const types={'.html':'text/html; charset=utf-8','.js':'text/javascript','.css':'text/css','.json':'application/json','.woff2':'font/woff2','.jpg':'image/jpeg','.webp':'image/webp'};
 createServer(async(req,res)=>{

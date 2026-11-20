@@ -193,7 +193,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
      // No transaction is held open while mPOS answers.
      await db.query('COMMIT');result=await readPosPage(pos,input);await db.query('BEGIN');
     }
-    else result=await syncFromPos(db,{...syncOptions(input),warehouseIds:options.posWarehouses!==undefined?options.posWarehouses:warehouseIdsFromEnv()},claims.sub);
+    else result=await syncFromPos(db,{...syncOptions(input),warehouseIds:options.posWarehouses!==undefined?options.posWarehouses:warehouseIdsFromEnv(),...(options.posPlan!==undefined?{planRows:options.posPlan}:{})},claims.sub);
    }
    else if(sales){
     const act=sales[3]?.startsWith('gateway-refunds/')?'settle':sales[3];

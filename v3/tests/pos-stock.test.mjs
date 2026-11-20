@@ -6,7 +6,8 @@ import {createServer} from 'node:http';
 import {migrate} from '../src/migrate.mjs';
 import {handler} from '../src/handler.mjs';
 import {testGateway} from '../src/payments.mjs';
-import {aggregate,matchSkus,skuKey,compactKey,posClientFromEnv,readPosPage,warehouseIdsFromEnv} from '../src/pos-stock.mjs';
+import {aggregate,matchSkus,skuKey,compactKey,posClientFromEnv,readPosPage,warehouseIdsFromEnv,planModelOf,PLAN_MODELS} from '../src/pos-stock.mjs';
+import {PLAN_2026} from '../shared/product-plan-2026.mjs';
 
 // Shape of GET /api/stock-warehouse rows (swagger StockWarehouseBalanceResponse), trimmed.
 const row=(id,stockCode,warehouseId,qtyAvailable,extra={})=>({id,stockMasterId:id,warehouseId,warehouseCode:'W'+warehouseId,warehouseName:warehouseId===1?'HQ':'Mid Valley',stockCode,description:'Item '+stockCode,colour:'Brown',qtyOnHand:qtyAvailable,qtyAvailable,isActive:true,...extra});
@@ -61,6 +62,23 @@ test('matchSkus: website SKU = mPOS model (category prefix dropped) + colour; mo
  const dup=matchSkus(codes,[v(1,'BAD 40107 F'),v(2,'bad40107-f')]);assert.equal(dup.matched.length,0);assert.match(dup.ambiguous[0].reason,/more than one website variant/);
 });
 
+test('Product list 2026: Jack Studio models only; SKUs and mPOS codes are tied to a listed model',()=>{
+ const models=PLAN_2026.map(r=>r[0]);
+ assert.equal(models.length,140);assert.equal(new Set(models).size,140);
+ assert.ok(!models.some(m=>/^(EBA|EBK|EBC|EWB|EBL)/.test(m)),'no Euro Polo');
+ for(const m of ['BAI50518','JWC41056','JWC41057','JWD30159','JWD31055','BL7410EX','K396L','JK40151L','JK40152L','BAD60303','BAD21002','JWC50351','JWC50353'])assert.ok(models.includes(m),m);
+ assert.equal(planModelOf('BAD60303-F'),'bad60303');
+ assert.equal(planModelOf('BAD21002'),'bad21002');
+ assert.equal(planModelOf('jwd 30157 n a'),'jwd30157');
+ assert.equal(planModelOf('BL7410EX B'),'bl7410ex','longest model wins over BL7410');
+ assert.equal(planModelOf('k396lb'),'k396l');
+ assert.equal(planModelOf('BL 3113 B'),null,'BL3113 is not BL311');
+ assert.equal(planModelOf('BAD 40107 F'),null,'not in the 2026 list');
+ assert.equal(planModelOf('JWB 21072 A'),null);
+ assert.equal(planModelOf(''),null);
+ assert.ok(PLAN_MODELS.length===140);
+});
+
 test('MPOS_WAREHOUSE_ID: empty = all; one or more IDs separated by commas',()=>{
  assert.equal(warehouseIdsFromEnv({}),null);assert.equal(warehouseIdsFromEnv({MPOS_WAREHOUSE_ID:' '}),null);
  assert.deepEqual(warehouseIdsFromEnv({MPOS_WAREHOUSE_ID:'12'}),[12]);
@@ -108,13 +126,13 @@ test('mPOS client: errors say what happened (status, type, length, start of repl
 });
 
 // Fake mPOS behind the real handler; the test reads it the way the admin page does.
-async function harness(feedRows,{failSize=null,posWarehouses=null}={}){
+async function harness(feedRows,{failSize=null,posWarehouses=null,posPlan=null}={}){
  const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  await migrate(sql);await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");await db.query('SET ROLE jackstudio_api');
  const state={rows:feedRows,calls:[]};
  const pos={fetchPage:async(page,size)=>{state.calls.push([page,size]);if(size===failSize){const e=new Error('mPOS did not answer within 24 seconds (page 1, 500 rows). Nothing was changed.');e.status=504;throw e;}return {page,pageSize:size,totalCount:state.rows.length,items:state.rows.slice((page-1)*size,page*size)};}};
  const gateway=testGateway({provider:'mock',serviceId:'JSMOCK',password:'p'.repeat(40),actionUrl:'https://pay.test',baseUrl:'https://shop.test'});
- const server=createServer(handler({connect:async()=>({...sql,release(){}})},async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false,pos,posWarehouses}));
+ const server=createServer(handler({connect:async()=>({...sql,release(){}})},async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false,pos,posWarehouses,posPlan}));
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port+'/api/v3/';
  const request=async(path,method='GET',body,token='editor')=>{const headers={'Content-Type':'application/json'};if(token)headers.Authorization='Bearer '+token;const r=await fetch(base+path,{method,headers,...(body?{body:JSON.stringify(body)}:{})});const t=await r.text();let j;try{j=JSON.parse(t);}catch{j=t;}return {status:r.status,body:j};};
  // Same loop as the admin card: pages until totalCount; 500 first, 100 if a 500-row page fails.
@@ -191,6 +209,36 @@ test('Sync from POS: many pages are read one request each; a failing 500-row pag
   assert.equal(r.body.pos.rows,1234);assert.equal(r.body.pos.page_size,100);assert.equal(r.body.pos.pages,13);
   assert.deepEqual(r.body.changes.map(c=>[c.sku,c.before,c.after]),[['BULK-7',1,3]]);
   assert.equal(r.body.pos_only.total,1233);
+ }finally{await h.close();}
+});
+
+test('Sync from POS with a product list: only listed models sync; others can be hidden (Draft); missing models listed',async()=>{
+ const plan=[['BAD40107','BAG','BACKPACK','RM199'],['JWC50351','WALLET','BI-FOLD','RM139'],['BAI50518','BAG','SLING(M)','RM299']];
+ const h=await harness([col(1,'BAG-BAD40107',1,3,'F'),col(2,'WAL-JWC50351',1,4,'B'),col(3,'WAL-K395',1,7,'A'),col(4,'BAG-BAI50518',1,5,'A')],{posPlan:plan});
+ try{
+  const mk=body=>h.request('products','POST',{status:'active',price_minor:1000,...body});
+  await mk({title:'Backpack',sku:'BAD 40107 F',inventory:0});
+  await mk({title:'Bifold',sku:'JWC50351-B',inventory:0});
+  const k395=(await mk({title:'Key Holder',sku:'K 395 A',inventory:2})).body;
+  await mk({title:'Old Bag',sku:'GONE-1',inventory:6,status:'archived'});
+  const gift=(await mk({title:'Gift Card'})).body;
+  let r=(await h.sync({dry_run:true})).body;
+  assert.equal(r.matched,2);assert.equal(r.changed,2);
+  assert.deepEqual(r.changes.map(c=>[c.sku,c.after]).sort(),[['BAD 40107 F',3],['JWC50351-B',4]]);
+  assert.equal(r.plan.models,3);assert.equal(r.plan.website_variants,2);assert.equal(r.plan.mpos_items_outside,1,'K395 in mPOS is left out');
+  assert.deepEqual(r.pos_only.items.map(p=>p.stock_code),['BAG-BAI50518'],'only listed models appear in "In mPOS, not on the website"');
+  assert.deepEqual(r.plan_missing.items.map(p=>[p.model,p.mpos_available]),[['BAI50518',5]]);
+  assert.deepEqual(r.outside.items.map(p=>[p.title,p.status]),[['Key Holder','active']],'archived and SKU-less products are not listed');
+  assert.equal(r.outside.active,1);assert.equal(r.site_only.total,0);
+  assert.equal((await h.db.query('SELECT status FROM products WHERE id=$1',[k395.id])).rows[0].status,'active','check changes nothing');
+
+  r=(await h.sync({hide_outside:true})).body;
+  assert.equal(r.changed,2);assert.equal(r.outside.hidden,1);
+  assert.equal((await h.db.query('SELECT status FROM products WHERE id=$1',[k395.id])).rows[0].status,'draft');
+  assert.equal((await h.db.query('SELECT status FROM products WHERE id=$1',[gift.id])).rows[0].status,'active','a product with no SKU is never hidden');
+  assert.equal(await stockOf(h.db,'K 395 A'),2,'stock of models outside the list is not touched');
+  await h.db.query('RESET ROLE');assert.equal((await h.db.query("SELECT count(*)::int AS n FROM audit_events WHERE entity='products' AND action='update' AND entity_id=$1 AND actor='editor'",[k395.id])).rows[0].n,1,'audited');await h.db.query('SET ROLE jackstudio_api');
+  r=(await h.sync({hide_outside:true})).body;assert.equal(r.outside.hidden,0,'already hidden');assert.equal(r.outside.active,0);
  }finally{await h.close();}
 });
 
