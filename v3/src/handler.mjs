@@ -18,7 +18,7 @@ import { sitemap,robots } from './seo.mjs';
 import { authorizeMaintenance,runMaintenance } from './maintenance.mjs';
 import { importCustomers,listCustomers as customerList,customerDetail } from './customers.mjs';
 import { checkPayment,prepareGatewayRefund,finishGatewayRefund,settleGatewayRefund } from './aftersales.mjs';
-import { posClientFromEnv,readPosPage,syncOptions,syncFromPos } from './pos-stock.mjs';
+import { posClientFromEnv,readPosPage,syncOptions,syncFromPos,warehouseIdsFromEnv } from './pos-stock.mjs';
 async function readBody(req,max=65536){
  let body;
  if(req.body!==undefined){
@@ -193,7 +193,7 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
      // No transaction is held open while mPOS answers.
      await db.query('COMMIT');result=await readPosPage(pos,input);await db.query('BEGIN');
     }
-    else result=await syncFromPos(db,syncOptions(input),claims.sub);
+    else result=await syncFromPos(db,{...syncOptions(input),warehouseIds:options.posWarehouses!==undefined?options.posWarehouses:warehouseIdsFromEnv()},claims.sub);
    }
    else if(sales){
     const act=sales[3]?.startsWith('gateway-refunds/')?'settle':sales[3];
