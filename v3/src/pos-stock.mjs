@@ -7,8 +7,10 @@ import {HttpError} from './auth.mjs';
 // Website stock = mPOS qtyAvailable minus units held by unpaid website orders, because checkout
 // already took those units off the website stock and gives them back if the order expires.
 export const POS_DEFAULT_URL='https://api_jack.mpos-web.com';
-export const POS_PAGE_SIZE=500;
-const MAX_PAGES=200,REQUEST_MS=15000,TOTAL_MS=20000,LIST_CAP=1000,MAX_QTY=2147483647;
+// Pages are read one per request (the browser drives the loop), so a slow mPOS never meets the 30 s
+// Vercel limit. 500 rows per page as asked; the browser falls back to 100 if a 500-row page fails.
+export const POS_PAGE_SIZES=[500,100];
+const MAX_PAGES=500,REQUEST_MS=24000,LIST_CAP=1000,MAX_QTY=2147483647,MAX_ROWS=100000;
 
 export const skuKey=s=>String(s??'').normalize('NFKC').trim().toLowerCase().replace(/\s+/g,' ');
 // Looser key used only when the exact key finds nothing: "BAD 40107-F" = "bad40107f".
@@ -22,37 +24,59 @@ export function posClientFromEnv(env=process.env,fetchImpl=globalThis.fetch){
  const warehouse=String(env.MPOS_WAREHOUSE_ID??'').trim();
  if(warehouse&&!/^[1-9]\d{0,9}$/.test(warehouse))throw new HttpError(503,'MPOS_WAREHOUSE_ID must be a warehouse number.');
  const endpoint=new URL('api/stock-warehouse',base.href.endsWith('/')?base.href:base.href+'/');
- return {warehouseId:warehouse?Number(warehouse):null,fetchStock:()=>fetchStock(fetchImpl,endpoint,key,warehouse)};
+ return {warehouseId:warehouse?Number(warehouse):null,fetchPage:(page,pageSize)=>{
+  const url=new URL(endpoint);
+  for(const [k,v] of Object.entries({inStockOnly:'true',isActive:'true',pageSize:String(pageSize),page:String(page)}))url.searchParams.set(k,v);
+  if(warehouse)url.searchParams.set('warehouseId',warehouse);
+  return getPage(fetchImpl,url,key);
+ }};
 }
 
-async function getPage(fetchImpl,url,key,deadline){
+// Printable start of a reply for error messages and logs (control characters removed, whitespace collapsed).
+const snippet=(text,n=160)=>String(text).replace(/[\u0000-\u001f\u007f]+/g,' ').replace(/\s+/g,' ').trim().slice(0,n);
+async function getPage(fetchImpl,url,key){
+ const started=Date.now(),info={page:url.searchParams.get('page'),pageSize:url.searchParams.get('pageSize')};
+ const secs=()=>((Date.now()-started)/1000).toFixed(1)+' s';
  let r;
- try{r=await fetchImpl(url,{headers:{'X-API-Key':key,Accept:'application/json'},signal:AbortSignal.timeout(Math.max(1000,Math.min(REQUEST_MS,deadline-Date.now())))});}
- catch(e){throw new HttpError(504,e?.name==='TimeoutError'||e?.name==='AbortError'?'mPOS did not answer in time. Nothing was changed. Try again.':'Could not reach mPOS. Nothing was changed.');}
+ try{r=await fetchImpl(url,{headers:{'X-API-Key':key,Accept:'application/json'},signal:AbortSignal.timeout(REQUEST_MS)});}
+ catch(e){
+  const timeout=e?.name==='TimeoutError'||e?.name==='AbortError';
+  console.error('pos-sync: mPOS request failed',{...info,after:secs(),error:timeout?'timeout':String(e?.cause?.code??e?.message??e).slice(0,80)});
+  throw new HttpError(504,timeout?`mPOS did not answer within ${REQUEST_MS/1000} seconds (page ${info.page}, ${info.pageSize} rows). Nothing was changed.`:'Could not reach mPOS. Nothing was changed.');
+ }
  if(r.status===401||r.status===403)throw new HttpError(502,`mPOS rejected the API key (HTTP ${r.status}). Check MPOS_API_KEY in Vercel. Nothing was changed.`);
- if(!r.ok)throw new HttpError(502,`mPOS returned HTTP ${r.status}. Nothing was changed.`);
- let body;try{body=await r.json();}catch{throw new HttpError(502,'mPOS sent a reply that is not JSON. Nothing was changed.');}
- if(!body||typeof body!=='object'||!Array.isArray(body.items??[]))throw new HttpError(502,'mPOS reply has no items list. Nothing was changed.');
+ let text;
+ try{text=await r.text();}
+ catch(e){console.error('pos-sync: mPOS reply cut off',{...info,status:r.status,after:secs()});throw new HttpError(502,`mPOS reply was cut off while reading (HTTP ${r.status}, after ${secs()}). Nothing was changed.`);}
+ console.log('pos-sync: mPOS page',{...info,status:r.status,after:secs(),characters:text.length});
+ if(!r.ok)throw new HttpError(502,`mPOS returned HTTP ${r.status}${text?`: "${snippet(text,120)}"`:''}. Nothing was changed.`);
+ let body;
+ try{body=JSON.parse(text.replace(/^﻿/,''));}
+ catch{
+  // Say exactly what came back, so the cause can be seen without access to mPOS (never the key).
+  const where=r.redirected&&r.url?(()=>{try{const u=new URL(r.url);return `, redirected to ${u.origin}${u.pathname}`;}catch{return ', redirected';}})():'';
+  const detail=`HTTP ${r.status}, ${r.headers?.get?.('content-type')||'no content type'}, ${text.length} characters after ${secs()}${where}${text.length?`, starts "${snippet(text)}"${text.length>160?`, ends "${snippet(text.slice(-80),80)}"`:''}`:''}`;
+  console.error('pos-sync: mPOS reply is not JSON',{...info,detail});
+  throw new HttpError(502,`mPOS sent a reply that is not JSON (${detail}). Nothing was changed.`);
+ }
+ // A bare list is accepted as one page with no total.
+ if(Array.isArray(body))body={items:body};
+ if(!body||typeof body!=='object'||!Array.isArray(body.items??[]))throw new HttpError(502,`mPOS reply has no items list (starts "${snippet(text)}"). Nothing was changed.`);
  return body;
 }
-// Every page, or an error: a partial list would make in-stock items look missing.
-async function fetchStock(fetchImpl,endpoint,key,warehouse){
- const deadline=Date.now()+TOTAL_MS,rows=new Map();let total=null,pages=0;
- for(let page=1;;page++){
-  if(page>MAX_PAGES)throw new HttpError(502,`mPOS has more than ${MAX_PAGES*POS_PAGE_SIZE} stock rows. Set MPOS_WAREHOUSE_ID to sync one warehouse. Nothing was changed.`);
-  if(Date.now()>deadline)throw new HttpError(504,'Reading mPOS took too long. Nothing was changed. Try again.');
-  const url=new URL(endpoint);
-  for(const [k,v] of Object.entries({inStockOnly:'true',isActive:'true',pageSize:String(POS_PAGE_SIZE),page:String(page)}))url.searchParams.set(k,v);
-  if(warehouse)url.searchParams.set('warehouseId',warehouse);
-  const body=await getPage(fetchImpl,url,key,deadline);pages++;
-  const items=body.items??[];
-  if(Number.isInteger(body.totalCount))total=body.totalCount;
-  items.forEach((item,i)=>rows.set(item?.id!=null?'id:'+item.id:`p${page}:${i}`,item));
-  const size=Number.isInteger(body.pageSize)&&body.pageSize>0?body.pageSize:POS_PAGE_SIZE;
-  if(!items.length||(total!=null?rows.size>=total:items.length<size))break;
- }
- if(total!=null&&rows.size!==total)throw new HttpError(502,`mPOS paging returned ${rows.size} of ${total} stock rows. Nothing was changed.`);
- return {rows:[...rows.values()],pages,total:rows.size};
+
+// Only what the sync uses, in short keys, so a whole catalogue fits in one request back.
+const compact=row=>({i:row?.id??null,s:String(row?.stockCode??'').slice(0,100),q:Number(row?.qtyAvailable??0)||0,w:row?.warehouseId??null,wc:String(row?.warehouseCode??'').slice(0,40),wn:String(row?.warehouseName??'').slice(0,80),d:String(row?.description??'').slice(0,120),c:String(row?.colour??'').slice(0,60)});
+const expand=r=>({id:r.i,stockCode:r.s,qtyAvailable:r.q,warehouseId:r.w,warehouseCode:r.wc,warehouseName:r.wn,description:r.d,colour:r.c});
+
+// Step "read": one mPOS page.
+export async function readPosPage(pos,input){
+ if(Object.keys(input).some(k=>!['step','page','page_size'].includes(k)))throw new HttpError(400,'Unknown field');
+ if(!Number.isInteger(input.page)||input.page<1||input.page>MAX_PAGES)throw new HttpError(400,`Page must be 1–${MAX_PAGES}`);
+ if(!POS_PAGE_SIZES.includes(input.page_size))throw new HttpError(400,`Page size must be ${POS_PAGE_SIZES.join(' or ')}`);
+ const body=await pos.fetchPage(input.page,input.page_size);
+ const items=body.items??[];
+ return {page:input.page,page_size:Number.isInteger(body.pageSize)&&body.pageSize>0?body.pageSize:input.page_size,total_count:Number.isInteger(body.totalCount)?body.totalCount:null,items:items.map(compact)};
 }
 
 // One entry per stock code (summed over warehouses).
@@ -94,12 +118,19 @@ export function matchSkus(codes,variants){
  return {matched,ambiguous,posOnly,siteOnly};
 }
 
+// Step "check" (dry run) or "apply": the rows the browser read page by page with step "read".
+// An editor sending made-up rows can do no more than with Adjust stock; every change is in the ledger.
 export function syncOptions(input){
  const value=input??{};
  if(typeof value!=='object'||Array.isArray(value))throw new HttpError(400,'Object required');
- if(Object.keys(value).some(k=>!['dry_run','zero_missing'].includes(k)))throw new HttpError(400,'Unknown field');
+ if(Object.keys(value).some(k=>!['dry_run','zero_missing','rows','pages','page_size'].includes(k)))throw new HttpError(400,'Unknown field');
  for(const k of ['dry_run','zero_missing'])if(value[k]!==undefined&&typeof value[k]!=='boolean')throw new HttpError(400,`${k} must be true or false`);
- return {dryRun:value.dry_run===true,zeroMissing:value.zero_missing===true};
+ if(!Array.isArray(value.rows))throw new HttpError(400,'Read stock from mPOS first');
+ if(value.rows.length>MAX_ROWS)throw new HttpError(400,`More than ${MAX_ROWS} mPOS rows`);
+ const str=(v,n)=>typeof v==='string'&&v.length<=n;
+ for(const r of value.rows)if(!r||typeof r!=='object'||!str(r.s,100)||typeof r.q!=='number'||!Number.isFinite(r.q)||!(r.w===null||Number.isInteger(r.w)||str(r.w,40))||!str(r.wc??'',40)||!str(r.wn??'',80)||!str(r.d??'',120)||!str(r.c??'',60))throw new HttpError(400,'Invalid mPOS row');
+ const pages=Number.isInteger(value.pages)&&value.pages>0?value.pages:null,pageSize=POS_PAGE_SIZES.includes(value.page_size)?value.page_size:null;
+ return {dryRun:value.dry_run===true,zeroMissing:value.zero_missing===true,feed:{rows:value.rows.map(expand),pages,total:value.rows.length,page_size:pageSize}};
 }
 
 const cap=list=>list.slice(0,LIST_CAP);
@@ -107,7 +138,7 @@ const label=v=>v.option_values?.length?v.option_values.join(' / '):'Default';
 
 // Matches the mPOS feed to website variants and (unless dry run) sets their stock in one statement,
 // with one ledger row per changed variant (reason "stocktake", note "POS sync …").
-export async function syncFromPos(db,feed,{dryRun,zeroMissing},actor){
+export async function syncFromPos(db,{feed,dryRun,zeroMissing},actor){
  const {codes,warehouses,blank,rounded}=aggregate(feed.rows);
  const variants=(await db.query(`SELECT v.id::text AS id,v.product_id::text AS product_id,v.sku,v.inventory,v.active,v.option_values,p.title AS product_title,p.status AS product_status
   FROM product_variants v JOIN products p ON p.id=v.product_id ORDER BY p.title,v.position,v.id`)).rows;
@@ -142,7 +173,7 @@ export async function syncFromPos(db,feed,{dryRun,zeroMissing},actor){
  const variantRow=v=>({variant_id:v.id,product_id:v.product_id,product_title:v.product_title,variant:label(v),sku:v.sku,inventory:v.inventory});
  return {
   dry_run:dryRun,zero_missing:zeroMissing,
-  pos:{rows:feed.total,pages:feed.pages,stock_codes:codes.size,warehouses,blank_codes:blank,rounded_quantities:rounded},
+  pos:{rows:feed.total,pages:feed.pages,page_size:feed.page_size??null,stock_codes:codes.size,warehouses,blank_codes:blank,rounded_quantities:rounded},
   matched:matched.length,changed:changed.length,unchanged:targets.length-changed.length,
   changes:cap(changed),
   fuzzy:cap(matched.filter(m=>m.fuzzy).map(m=>({sku:m.variant.sku,stock_code:m.pos.stock_code,product_title:m.variant.product_title}))),

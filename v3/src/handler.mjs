@@ -18,8 +18,8 @@ import { sitemap,robots } from './seo.mjs';
 import { authorizeMaintenance,runMaintenance } from './maintenance.mjs';
 import { importCustomers,listCustomers as customerList,customerDetail } from './customers.mjs';
 import { checkPayment,prepareGatewayRefund,finishGatewayRefund,settleGatewayRefund } from './aftersales.mjs';
-import { posClientFromEnv,syncOptions,syncFromPos } from './pos-stock.mjs';
-async function readBody(req){
+import { posClientFromEnv,readPosPage,syncOptions,syncFromPos } from './pos-stock.mjs';
+async function readBody(req,max=65536){
  let body;
  if(req.body!==undefined){
   if(typeof req.body==='string')body=req.body;
@@ -31,11 +31,11 @@ async function readBody(req){
   }else throw new HttpError(400,'Invalid request body');
  }else{
   const chunks=[];let bytes=0;
-  for await(const chunk of req){const b=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);bytes+=b.length;if(bytes>65536)throw new HttpError(413,'Request too large');chunks.push(b);}
+  for await(const chunk of req){const b=Buffer.isBuffer(chunk)?chunk:Buffer.from(chunk);bytes+=b.length;if(bytes>max)throw new HttpError(413,'Request too large');chunks.push(b);}
   body=Buffer.concat(chunks);
  }
  if(body===undefined)throw new HttpError(400,'Invalid request body');
- if(Buffer.byteLength(body)>65536)throw new HttpError(413,'Request too large');
+ if(Buffer.byteLength(body)>max)throw new HttpError(413,'Request too large');
  return body.toString('utf8');
 }
 const isJson=req=>req.headers['content-type']?.split(';')[0].trim().toLowerCase()==='application/json';
@@ -147,7 +147,8 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   const catalogImport=path==='/api/v3/catalog/import';
   if(catalogImport&&req.method!=='POST')throw new HttpError(405,'Method not available');
   if(mediaImport&&!['GET','POST'].includes(req.method))throw new HttpError(405,'Method not available');
-  // Stock from the shop POS (mPOS): {dry_run:true} previews, otherwise applies (src/pos-stock.mjs).
+  // Stock from the shop POS (mPOS): {step:'read'} reads one mPOS page; the rows are then sent back
+  // to check ({dry_run:true}) or apply (src/pos-stock.mjs).
   const posSync=path==='/api/v3/inventory/pos-sync';
   if(posSync&&req.method!=='POST')throw new HttpError(405,'Method not available');
   const match=people||page||sales||theme||mediaImport||catalogImport||ops||posSync?null:path.match(/^\/api\/v3\/(products|collections|media\/previews|media|session|dashboard|uploads\/sign|uploads\/finalize|inventory\/adjustments|inventory)(?:\/([1-9]\d{0,17})(\/preview)?)?$/);
@@ -182,17 +183,17 @@ export function handler(pool,verify,options={}){return async(req,res)=>{
   }
   else{
    if(!isJson(req))throw new HttpError(415,'JSON required');
-   const body=await readBody(req);
+   const body=await readBody(req,posSync?4000000:65536);
    let input;try{input=JSON.parse(body);}catch{throw new HttpError(400,'Invalid JSON');}
    if(people)result=await importCustomers(db,input,claims.sub);
    else if(posSync){
-    const opts=syncOptions(input),pos=options.pos??posClientFromEnv();
-    if(!pos)throw new HttpError(503,'POS sync is not set up. Add MPOS_API_KEY to the server environment in Vercel.');
-    // No transaction is held open while mPOS answers; stock is read and written in a new one.
-    await db.query('COMMIT');
-    const feed=await pos.fetchStock();
-    await db.query('BEGIN');
-    result=await syncFromPos(db,feed,opts,claims.sub);
+    if(input?.step==='read'){
+     const pos=options.pos??posClientFromEnv();
+     if(!pos)throw new HttpError(503,'POS sync is not set up. Add MPOS_API_KEY to the server environment in Vercel.');
+     // No transaction is held open while mPOS answers.
+     await db.query('COMMIT');result=await readPosPage(pos,input);await db.query('BEGIN');
+    }
+    else result=await syncFromPos(db,syncOptions(input),claims.sub);
    }
    else if(sales){
     const act=sales[3]?.startsWith('gateway-refunds/')?'settle':sales[3];

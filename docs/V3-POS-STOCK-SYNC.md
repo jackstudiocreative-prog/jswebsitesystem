@@ -11,24 +11,34 @@ Shopify's inventory is not accurate, so website stock comes from the shop POS. T
 
 Admin → Products → **Inventory** → card **Sync from POS** (editors and owners; viewers do not see it).
 
-1. **Check POS stock** reads mPOS and shows what would change. Nothing changes yet.
+1. **Check POS stock** reads mPOS page by page (progress shown) and shows what would change. Nothing
+   changes yet.
 2. Review the lists:
    - *Will change*: website stock now → after.
    - *On the website, not in mPOS*: selling variants whose SKU is not in the mPOS in-stock list (sold out
      in mPOS, or the SKU is written differently).
    - *In mPOS, not on the website*: in-stock POS items with no website variant.
    - *Matched ignoring spaces and dashes* and *Skipped: could match more than one item*.
-3. **Apply to website stock** reads mPOS again and writes. Optional tick box: also set the
-   "not in mPOS" variants to 0.
+3. **Apply to website stock** writes exactly the mPOS stock that was checked (it does not read mPOS
+   again). Optional tick box: also set the "not in mPOS" variants to 0.
 
 ## How it works
 
-`POST /api/v3/inventory/pos-sync` (`src/pos-stock.mjs`), body `{"dry_run":true}` to preview,
-`{}` to apply, `{"zero_missing":true}` to also zero the missing SKUs.
+`POST /api/v3/inventory/pos-sync` (`src/pos-stock.mjs`), in two kinds of request:
 
-- Calls `GET {MPOS_API_URL}/api/stock-warehouse?inStockOnly=true&isActive=true&pageSize=500&page=N`
-  with header `X-API-Key: $MPOS_API_KEY` until all `totalCount` rows are read. If the pages do not add up
-  to `totalCount`, or any page fails, nothing is changed.
+1. `{"step":"read","page":N,"page_size":500}` reads **one** mPOS page:
+   `GET {MPOS_API_URL}/api/stock-warehouse?inStockOnly=true&isActive=true&pageSize=500&page=N` with header
+   `X-API-Key: $MPOS_API_KEY` (up to 24 s), and returns the rows in a compact form. The admin page calls it
+   page after page until `totalCount` rows are read, so a slow mPOS never meets Vercel's 30-second limit.
+   If any 500-row page fails (timeout, cut-off or non-JSON reply), the page reads everything again at
+   `page_size` 100. If the pages do not add up to `totalCount`, nothing is changed.
+2. `{"dry_run":true,"rows":[…]}` checks, `{"rows":[…]}` applies, `{"zero_missing":true,…}` also zeroes the
+   missing SKUs. Up to 4 MB / 100,000 rows. Rows are validated; an editor sending made-up rows can do no more
+   than with Adjust stock, and every change is in the inventory history.
+
+- Every mPOS page is logged in the Vercel function log with its status, time and size
+  (`pos-sync: mPOS page`). Failures say the HTTP status, content type, length, time and the start of the
+  reply (never the key), in the error and in the log.
 - Rows are per item **per warehouse**. `qtyAvailable` is summed per `stockCode` over all warehouses
   (or only `MPOS_WAREHOUSE_ID`), rounded down, never below 0.
 - `stockCode` = website variant SKU, ignoring case and repeated spaces. If that finds nothing, spaces,
@@ -39,7 +49,7 @@ Admin → Products → **Inventory** → card **Sync from POS** (editors and own
 - One SQL statement updates the variants and writes one inventory-history row each (reason *Stocktake*,
   note `POS sync: mPOS available N…`, staff member recorded). Product totals are refreshed. Running it again
   with the same mPOS data changes nothing.
-- mPOS is called with no database transaction open; the write happens in a new transaction.
+- mPOS is called with no database transaction open.
 - No database migration is needed.
 
 ## Configuration (Vercel, server-only)

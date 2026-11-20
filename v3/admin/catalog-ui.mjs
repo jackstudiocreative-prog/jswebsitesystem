@@ -300,7 +300,7 @@ export function mountAdmin(api,role,notify,account={}){
   function show(r){
    out.replaceChildren();
    const wh=r.pos.warehouses.map(w=>w.name||w.code||String(w.id)).join(', ')||'none';
-   out.append(el('p',`mPOS: ${r.pos.rows} stock rows from ${r.pos.warehouses.length} warehouse${r.pos.warehouses.length===1?'':'s'} (${wh}) → ${r.pos.stock_codes} SKUs in stock.`));
+   out.append(el('p',`mPOS: ${r.pos.rows} stock rows from ${r.pos.warehouses.length} warehouse${r.pos.warehouses.length===1?'':'s'} (${wh}) → ${r.pos.stock_codes} SKUs in stock.${r.pos.page_size&&r.pos.page_size<500?` (Read ${r.pos.page_size} rows at a time: mPOS could not send 500 at once.)`:''}`));
    out.append(el('p',r.dry_run?`Matched ${r.matched} website variants: ${r.changed} will change, ${r.unchanged} already correct.`:`Done: ${r.changed} variants updated, ${r.unchanged} already correct.`,r.dry_run?'':'pos-done'));
    if(r.pos.blank_codes||r.pos.rounded_quantities||r.variants_without_sku)out.append(el('p',[r.pos.blank_codes?`${r.pos.blank_codes} mPOS rows have no stock code`:'',r.pos.rounded_quantities?`${r.pos.rounded_quantities} quantities were negative or fractional and were rounded down (never below 0)`:'',r.variants_without_sku?`${r.variants_without_sku} website variants have no SKU and were skipped`:''].filter(Boolean).join(' · ')+'.','muted'));
    out.append(section(r.dry_run?'Will change':'Changed',r.changed,mini(['Product','Variant','SKU','Now','After','Held by unpaid orders'],r.changes.map(c=>[c.product_title,c.variant,c.sku,c.before,c.after,c.held||''])),r.dry_run));
@@ -314,12 +314,37 @@ export function mountAdmin(api,role,notify,account={}){
    if(r.dry_run){
     const zero=el('input');zero.type='checkbox';zero.id='pos-zero-missing';const zl=el('label',` Also set the ${r.site_only.total} website variants not in the mPOS list to 0 (out of stock)`);zl.prepend(zero);zl.className='checkbox-line';
     if(r.site_only.total)out.append(zl);
-    const apply=button('Apply to website stock',async()=>{const z=zero.checked;if(!window.confirm(`Update website stock from mPOS${z?` and set ${r.site_only.total} missing variants to 0`:''}?`))return;const res=await api('inventory/pos-sync',{zero_missing:z},'POST');notify(`Stock synced from POS: ${res.changed} variants updated.`);await render();const card=root.querySelector('.pos-sync');if(card)card.__show?.(res);});
+    const apply=button('Apply to website stock',async()=>{const z=zero.checked;if(!window.confirm(`Update website stock from mPOS${z?` and set ${r.site_only.total} missing variants to 0`:''}?`))return;const res=await api('inventory/pos-sync',{zero_missing:z,rows:read.rows,pages:read.pages,page_size:read.page_size},'POST');notify(`Stock synced from POS: ${res.changed} variants updated.`);await render();const card=root.querySelector('.pos-sync');if(card)card.__show?.(res);});
     apply.className='primary';out.append(apply);
    }
   }
   box.__show=show;
-  box.append(button('Check POS stock',async()=>{out.replaceChildren(el('p','Reading stock from mPOS…','muted'));try{show(await api('inventory/pos-sync',{dry_run:true},'POST'));}catch(e){out.replaceChildren(el('p',e.message,'error'));throw e;}}),out);
+  // mPOS is read one page per request (each request has its own time limit). 500 rows a page first;
+  // if any 500-row page fails, everything is read again at 100. Apply uses exactly the rows checked.
+  let read=null;
+  async function readAll(say){
+   let first=null;
+   for(const size of [500,100]){
+    try{
+     const rows=new Map();let total=null,page=1;
+     for(;;page++){
+      if(page>500)throw Error('mPOS has too many pages. Nothing was changed.');
+      say(`Reading stock from mPOS… page ${page}${total!=null?` of ${Math.max(1,Math.ceil(total/size))}`:''} (${rows.size}${total!=null?` of ${total}`:''} rows, ${size} per page)`);
+      const r=await api('inventory/pos-sync',{step:'read',page,page_size:size},'POST');
+      if(r.total_count!=null)total=r.total_count;
+      r.items.forEach((item,i)=>rows.set(item.i!=null?'id:'+item.i:`p${page}:${i}`,item));
+      if(!r.items.length||(total!=null?rows.size>=total:r.items.length<r.page_size))break;
+     }
+     if(total!=null&&rows.size!==total)throw Error(`mPOS paging returned ${rows.size} of ${total} stock rows. Nothing was changed.`);
+     return {rows:[...rows.values()],pages:page,page_size:size};
+    }catch(e){if(size===500){first=e.message;continue;}throw Error(`${e.message}${first?` (500 rows per page also failed: ${first})`:''}`);}
+   }
+  }
+  box.append(button('Check POS stock',async()=>{
+   const say=t=>out.replaceChildren(el('p',t,'muted'));
+   try{read=await readAll(say);say(`Read ${read.rows.length} stock rows from mPOS. Matching to website SKUs…`);show(await api('inventory/pos-sync',{dry_run:true,rows:read.rows,pages:read.pages,page_size:read.page_size},'POST'));}
+   catch(e){out.replaceChildren(el('p',e.message,'error'));throw e;}
+  }),out);
   return box;
  }
  async function inventoryView(ticket){
