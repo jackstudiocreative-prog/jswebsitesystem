@@ -2,8 +2,10 @@ import {HttpError} from './auth.mjs';
 // Stock from the shop POS (mPOS "JACKSTUDIO API"). The POS is the record for stock: Shopify's
 // inventory is not accurate. Read-only: nothing is ever written to mPOS.
 //
-// GET /api/stock-warehouse returns one row per item per warehouse. Rows are summed per stockCode
-// (all warehouses, or only MPOS_WAREHOUSE_ID when set) and matched to website variant SKUs.
+// GET /api/stock-warehouse returns one row per item colour/size per warehouse. mPOS keeps the model in
+// stockCode with a category prefix and the colour apart ("BAG-BAD40107" + colour "F"); the website SKU
+// has both in one ("BAD 40107 F"). Rows are summed per stockCode + colour + size over the counted
+// warehouses (MPOS_WAREHOUSE_ID: one or more IDs, comma-separated; empty = all) and matched to SKUs.
 // Website stock = mPOS qtyAvailable minus units held by unpaid website orders, because checkout
 // already took those units off the website stock and gives them back if the order expires.
 export const POS_DEFAULT_URL='https://api_jack.mpos-web.com';
@@ -16,13 +18,27 @@ export const skuKey=s=>String(s??'').normalize('NFKC').trim().toLowerCase().repl
 // Looser key used only when the exact key finds nothing: "BAD 40107-F" = "bad40107f".
 export const compactKey=s=>skuKey(s).replace(/[\s\-_./]/g,'');
 
+// Category prefix in front of the model in mPOS stock codes: "BAG-", "ACC-" (only when a number follows).
+const PREFIX=/^[a-z]{2,6}\s*-\s*(?=.*\d)/;
+export const baseCode=code=>skuKey(code).replace(PREFIX,'');
+
+// MPOS_WAREHOUSE_ID: warehouse IDs to count, comma-separated ("12" or "12,15"). Empty = every warehouse.
+export function warehouseIdsFromEnv(env=process.env){
+ const raw=String(env.MPOS_WAREHOUSE_ID??'').trim();
+ if(!raw)return null;
+ const ids=raw.split(',').map(s=>s.trim()).filter(Boolean);
+ if(!ids.length||ids.some(s=>!/^[1-9]\d{0,9}$/.test(s)))throw new HttpError(503,'MPOS_WAREHOUSE_ID must be warehouse numbers, separated by commas.');
+ return [...new Set(ids.map(Number))];
+}
+
 export function posClientFromEnv(env=process.env,fetchImpl=globalThis.fetch){
  const key=String(env.MPOS_API_KEY??'').trim();
  if(!key)return null;
  let base;try{base=new URL(String(env.MPOS_API_URL||POS_DEFAULT_URL));}catch{throw new HttpError(503,'MPOS_API_URL is not a valid URL.');}
  if(base.protocol!=='https:'&&!['127.0.0.1','localhost'].includes(base.hostname))throw new HttpError(503,'MPOS_API_URL must use https.');
- const warehouse=String(env.MPOS_WAREHOUSE_ID??'').trim();
- if(warehouse&&!/^[1-9]\d{0,9}$/.test(warehouse))throw new HttpError(503,'MPOS_WAREHOUSE_ID must be a warehouse number.');
+ const ids=warehouseIdsFromEnv(env);
+ // One warehouse: let mPOS filter (fewer rows). Several: read all and count only those (see aggregate).
+ const warehouse=ids?.length===1?String(ids[0]):'';
  const endpoint=new URL('api/stock-warehouse',base.href.endsWith('/')?base.href:base.href+'/');
  return {warehouseId:warehouse?Number(warehouse):null,fetchPage:(page,pageSize)=>{
   const url=new URL(endpoint);
@@ -66,8 +82,8 @@ async function getPage(fetchImpl,url,key){
 }
 
 // Only what the sync uses, in short keys, so a whole catalogue fits in one request back.
-const compact=row=>({i:row?.id??null,s:String(row?.stockCode??'').slice(0,100),q:Number(row?.qtyAvailable??0)||0,w:row?.warehouseId??null,wc:String(row?.warehouseCode??'').slice(0,40),wn:String(row?.warehouseName??'').slice(0,80),d:String(row?.description??'').slice(0,120),c:String(row?.colour??'').slice(0,60)});
-const expand=r=>({id:r.i,stockCode:r.s,qtyAvailable:r.q,warehouseId:r.w,warehouseCode:r.wc,warehouseName:r.wn,description:r.d,colour:r.c});
+const compact=row=>({i:row?.id??null,s:String(row?.stockCode??'').slice(0,100),q:Number(row?.qtyAvailable??0)||0,w:row?.warehouseId??null,wc:String(row?.warehouseCode??'').slice(0,40),wn:String(row?.warehouseName??'').slice(0,80),d:String(row?.description??'').slice(0,120),c:String(row?.colour??'').slice(0,60),z:String(row?.size??'').slice(0,60)});
+const expand=r=>({id:r.i,stockCode:r.s,qtyAvailable:r.q,warehouseId:r.w,warehouseCode:r.wc,warehouseName:r.wn,description:r.d,colour:r.c,size:r.z??''});
 
 // Step "read": one mPOS page.
 export async function readPosPage(pos,input){
@@ -79,42 +95,54 @@ export async function readPosPage(pos,input){
  return {page:input.page,page_size:Number.isInteger(body.pageSize)&&body.pageSize>0?body.pageSize:input.page_size,total_count:Number.isInteger(body.totalCount)?body.totalCount:null,items:items.map(compact)};
 }
 
-// One entry per stock code (summed over warehouses).
-export function aggregate(rows){
- const codes=new Map(),warehouses=new Map();let blank=0,rounded=0;
+// One entry per stock code + colour + size, summed over the counted warehouses (all when ids is null).
+export function aggregate(rows,ids=null){
+ const codes=new Map(),warehouses=new Map(),count=ids?new Set(ids.map(String)):null;let blank=0,rounded=0;
  for(const row of rows){
-  const key=skuKey(row?.stockCode);
-  if(!key){blank++;continue;}
+  const code=skuKey(row?.stockCode);
+  if(!code){blank++;continue;}
+  const w=row.warehouseId??row.warehouseCode??'?',counted=!count||count.has(String(row.warehouseId));
+  const wh=warehouses.get(String(w))??{id:row.warehouseId??null,code:row.warehouseCode??'',name:row.warehouseName??'',rows:0,counted};wh.rows++;warehouses.set(String(w),wh);
+  if(!counted)continue;
+  const colour=String(row.colour??'').trim(),size=String(row.size??'').trim(),key=[code,skuKey(colour),skuKey(size)].join('|');
   const qty=Number(row.qtyAvailable??0);
-  const w=row.warehouseId??row.warehouseCode??'?';
-  const wh=warehouses.get(String(w))??{id:row.warehouseId??null,code:row.warehouseCode??'',name:row.warehouseName??'',rows:0};wh.rows++;warehouses.set(String(w),wh);
-  const entry=codes.get(key)??{key,stock_code:String(row.stockCode).trim(),description:String(row.description??'').trim(),colour:String(row.colour??'').trim(),qty:0,rows:0};
+  const entry=codes.get(key)??{key,stock_code:String(row.stockCode).trim(),colour,size,description:String(row.description??'').trim(),qty:0,rows:0};
   entry.qty+=Number.isFinite(qty)?qty:0;entry.rows++;codes.set(key,entry);
  }
  for(const e of codes.values()){const q=Math.min(MAX_QTY,Math.max(0,Math.floor(e.qty)));if(q!==e.qty)rounded++;e.qty=q;}
- return {codes,warehouses:[...warehouses.values()],blank,rounded};
+ return {codes,warehouses:[...warehouses.values()].sort((a,b)=>Number(b.counted)-Number(a.counted)||b.rows-a.rows),blank,rounded};
 }
 
-// Pure matching: exact SKU (case and repeated spaces ignored), then the compact key when it is
-// unique on both sides. Anything that could match more than one item is skipped and reported.
+// Matching. Website SKU ("BAD 40107 F", "JWC50351-B") against the mPOS model (stock code with or without
+// its category prefix) plus colour and size, ignoring case, spaces, dashes, dots and slashes. Three passes,
+// most specific first: model+colour+size, model+colour, model alone (single-colour website products such
+// as "BAD21002"). A SKU that fits more than one mPOS item in a pass is skipped and reported, never guessed.
+export const HOW=['model + colour + size','model + colour','model only'];
 export function matchSkus(codes,variants){
- const site=new Map();
- for(const v of variants){const k=skuKey(v.sku);if(!k)continue;const list=site.get(k)??[];list.push(v);site.set(k,list);}
- const matched=[],ambiguous=[],usedPos=new Set(),usedSite=new Set();
- for(const [k,list] of site){
-  if(list.length>1){ambiguous.push({sku:list.map(v=>v.sku).join(' / '),reason:'Same SKU on more than one website variant'});for(const v of list)usedSite.add(v.id);if(codes.has(k))usedPos.add(k);continue;}
-  const pos=codes.get(k);if(pos){matched.push({variant:list[0],pos,fuzzy:false});usedPos.add(k);usedSite.add(list[0].id);}
+ const tiers=[new Map(),new Map(),new Map()];
+ const put=(t,k,e)=>{if(!k)return;const l=tiers[t].get(k)??[];if(!l.includes(e))l.push(e);tiers[t].set(k,l);};
+ for(const e of codes.values()){
+  const c=compactKey(e.colour),z=compactKey(e.size);
+  for(const model of new Set([compactKey(baseCode(e.stock_code)),compactKey(e.stock_code)])){
+   if(!model)continue;
+   put(0,model+c+z,e);if(z)put(1,model+c,e);put(2,model,e);
+  }
  }
- const loose=new Map(),add=(c,side,item)=>{if(!c)return;const g=loose.get(c)??{pos:[],site:[]};g[side].push(item);loose.set(c,g);};
- for(const [k,pos] of codes)if(!usedPos.has(k))add(compactKey(k),'pos',pos);
- for(const v of variants)if(skuKey(v.sku)&&!usedSite.has(v.id))add(compactKey(v.sku),'site',v);
- for(const g of loose.values()){
-  if(!g.pos.length||!g.site.length)continue;
-  if(g.pos.length===1&&g.site.length===1){matched.push({variant:g.site[0],pos:g.pos[0],fuzzy:true});usedPos.add(g.pos[0].key);usedSite.add(g.site[0].id);}
-  else{ambiguous.push({sku:[...g.site.map(v=>v.sku),...g.pos.map(p=>p.stock_code)].join(' / '),reason:'Matches more than one item when spaces and dashes are ignored'});for(const p of g.pos)usedPos.add(p.key);for(const v of g.site)usedSite.add(v.id);}
+ const site=new Map();
+ for(const v of variants){const k=compactKey(v.sku);if(!k)continue;const list=site.get(k)??[];list.push(v);site.set(k,list);}
+ const matched=[],ambiguous=[],usedPos=new Set(),done=new Set();
+ for(const [k,list] of site)if(list.length>1){ambiguous.push({sku:list.map(v=>v.sku).join(' / '),reason:'Same SKU on more than one website variant'});done.add(k);}
+ const label=e=>[e.stock_code,e.colour&&`colour ${e.colour}`,e.size&&`size ${e.size}`].filter(Boolean).join(' ');
+ for(let t=0;t<3;t++)for(const [k,list] of site){
+  if(done.has(k))continue;
+  const cand=(tiers[t].get(k)??[]).filter(e=>!usedPos.has(e.key));
+  if(!cand.length)continue;
+  done.add(k);
+  if(cand.length===1){const e=cand[0];matched.push({variant:list[0],pos:e,how:t===0?['model',e.colour&&'colour',e.size&&'size'].filter(Boolean).join(' + '):t===1?'model + colour (size not in SKU)':'model only'});usedPos.add(e.key);}
+  else ambiguous.push({sku:list[0].sku,reason:`Fits ${cand.length} mPOS items (${HOW[t]}): ${cand.slice(0,4).map(label).join(', ')}${cand.length>4?', …':''}`});
  }
  const posOnly=[...codes.values()].filter(p=>!usedPos.has(p.key));
- const siteOnly=variants.filter(v=>skuKey(v.sku)&&!usedSite.has(v.id));
+ const siteOnly=variants.filter(v=>compactKey(v.sku)&&!done.has(compactKey(v.sku)));
  return {matched,ambiguous,posOnly,siteOnly};
 }
 
@@ -128,7 +156,7 @@ export function syncOptions(input){
  if(!Array.isArray(value.rows))throw new HttpError(400,'Read stock from mPOS first');
  if(value.rows.length>MAX_ROWS)throw new HttpError(400,`More than ${MAX_ROWS} mPOS rows`);
  const str=(v,n)=>typeof v==='string'&&v.length<=n;
- for(const r of value.rows)if(!r||typeof r!=='object'||!str(r.s,100)||typeof r.q!=='number'||!Number.isFinite(r.q)||!(r.w===null||Number.isInteger(r.w)||str(r.w,40))||!str(r.wc??'',40)||!str(r.wn??'',80)||!str(r.d??'',120)||!str(r.c??'',60))throw new HttpError(400,'Invalid mPOS row');
+ for(const r of value.rows)if(!r||typeof r!=='object'||!str(r.s,100)||typeof r.q!=='number'||!Number.isFinite(r.q)||!(r.w===null||Number.isInteger(r.w)||str(r.w,40))||!str(r.wc??'',40)||!str(r.wn??'',80)||!str(r.d??'',120)||!str(r.c??'',60)||!str(r.z??'',60))throw new HttpError(400,'Invalid mPOS row');
  const pages=Number.isInteger(value.pages)&&value.pages>0?value.pages:null,pageSize=POS_PAGE_SIZES.includes(value.page_size)?value.page_size:null;
  return {dryRun:value.dry_run===true,zeroMissing:value.zero_missing===true,feed:{rows:value.rows.map(expand),pages,total:value.rows.length,page_size:pageSize}};
 }
@@ -138,8 +166,8 @@ const label=v=>v.option_values?.length?v.option_values.join(' / '):'Default';
 
 // Matches the mPOS feed to website variants and (unless dry run) sets their stock in one statement,
 // with one ledger row per changed variant (reason "stocktake", note "POS sync …").
-export async function syncFromPos(db,{feed,dryRun,zeroMissing},actor){
- const {codes,warehouses,blank,rounded}=aggregate(feed.rows);
+export async function syncFromPos(db,{feed,dryRun,zeroMissing,warehouseIds=null},actor){
+ const {codes,warehouses,blank,rounded}=aggregate(feed.rows,warehouseIds);
  const variants=(await db.query(`SELECT v.id::text AS id,v.product_id::text AS product_id,v.sku,v.inventory,v.active,v.option_values,p.title AS product_title,p.status AS product_status
   FROM product_variants v JOIN products p ON p.id=v.product_id ORDER BY p.title,v.position,v.id`)).rows;
  const noSku=variants.filter(v=>v.active&&v.product_status!=='archived'&&!skuKey(v.sku)).length;
@@ -169,16 +197,16 @@ export async function syncFromPos(db,{feed,dryRun,zeroMissing},actor){
   }
  }
  const byId=new Map(variants.map(v=>[v.id,v])),posFor=new Map(matched.map(m=>[m.variant.id,m.pos]));
- const changed=changes.map(c=>{const v=byId.get(c.variant_id),p=posFor.get(c.variant_id);return {variant_id:c.variant_id,product_id:v.product_id,product_title:v.product_title,variant:label(v),sku:v.sku,stock_code:p?.stock_code??null,before:Number(c.before),after:Number(c.after),held:c.held==null?null:Number(c.held)};});
+ const changed=changes.map(c=>{const v=byId.get(c.variant_id),p=posFor.get(c.variant_id);return {variant_id:c.variant_id,product_id:v.product_id,product_title:v.product_title,variant:label(v),sku:v.sku,stock_code:p?.stock_code??null,colour:p?.colour??null,before:Number(c.before),after:Number(c.after),held:c.held==null?null:Number(c.held)};});
  const variantRow=v=>({variant_id:v.id,product_id:v.product_id,product_title:v.product_title,variant:label(v),sku:v.sku,inventory:v.inventory});
  return {
   dry_run:dryRun,zero_missing:zeroMissing,
-  pos:{rows:feed.total,pages:feed.pages,page_size:feed.page_size??null,stock_codes:codes.size,warehouses,blank_codes:blank,rounded_quantities:rounded},
+  pos:{rows:feed.total,pages:feed.pages,page_size:feed.page_size??null,stock_codes:codes.size,warehouses,counted_warehouses:warehouses.filter(w=>w.counted).length,warehouse_filter:warehouseIds,blank_codes:blank,rounded_quantities:rounded},
   matched:matched.length,changed:changed.length,unchanged:targets.length-changed.length,
   changes:cap(changed),
-  fuzzy:cap(matched.filter(m=>m.fuzzy).map(m=>({sku:m.variant.sku,stock_code:m.pos.stock_code,product_title:m.variant.product_title}))),
+  matches:cap(matched.map(m=>({sku:m.variant.sku,product_title:m.variant.product_title,variant:label(m.variant),stock_code:m.pos.stock_code,colour:m.pos.colour,size:m.pos.size,qty:m.pos.qty,how:m.how})).sort((a,b)=>a.sku.localeCompare(b.sku))),
   ambiguous:cap(ambiguous),
-  pos_only:{total:posOnly.length,items:cap(posOnly.sort((a,b)=>a.stock_code.localeCompare(b.stock_code)).map(p=>({stock_code:p.stock_code,description:p.description,colour:p.colour,qty:p.qty})))},
+  pos_only:{total:posOnly.length,items:cap(posOnly.sort((a,b)=>a.stock_code.localeCompare(b.stock_code)||a.colour.localeCompare(b.colour)).map(p=>({stock_code:p.stock_code,description:p.description,colour:p.colour,size:p.size,qty:p.qty})))},
   site_only:{total:missing.length,items:cap(missing.map(variantRow))},
   variants_without_sku:noSku
  };

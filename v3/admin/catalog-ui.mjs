@@ -299,17 +299,20 @@ export function mountAdmin(api,role,notify,account={}){
   const more=(shown,total)=>total>shown?el('p',`Showing ${shown} of ${total}.`,'muted'):null;
   function show(r){
    out.replaceChildren();
-   const wh=r.pos.warehouses.map(w=>w.name||w.code||String(w.id)).join(', ')||'none';
-   out.append(el('p',`mPOS: ${r.pos.rows} stock rows from ${r.pos.warehouses.length} warehouse${r.pos.warehouses.length===1?'':'s'} (${wh}) → ${r.pos.stock_codes} SKUs in stock.${r.pos.page_size&&r.pos.page_size<500?` (Read ${r.pos.page_size} rows at a time: mPOS could not send 500 at once.)`:''}`));
+   const whs=r.pos.warehouses,counted=whs.filter(w=>w.counted),name=w=>w.name||w.code||String(w.id);
+   out.append(el('p',`mPOS: ${r.pos.rows} stock rows from ${whs.length} warehouse${whs.length===1?'':'s'}. Counted: ${r.pos.warehouse_filter?counted.map(name).join(', ')||'none of the chosen warehouses were found':`all ${whs.length} warehouses added together`} → ${r.pos.stock_codes} items (code + colour) in stock.${r.pos.page_size&&r.pos.page_size<500?` (Read ${r.pos.page_size} rows at a time: mPOS could not send 500 at once.)`:''}`));
+   if(!r.pos.warehouse_filter&&whs.length>1)out.append(el('p','To count only some warehouses (for example the online store), set MPOS_WAREHOUSE_ID in Vercel to their IDs from the list below, separated by commas, then redeploy.','muted'));
+   out.append(section('Warehouses',whs.length,mini(['ID','Code','Name','Stock rows','Counted'],whs.map(w=>[w.id,w.code,w.name,w.rows,w.counted?'Yes':'No']))));
    out.append(el('p',r.dry_run?`Matched ${r.matched} website variants: ${r.changed} will change, ${r.unchanged} already correct.`:`Done: ${r.changed} variants updated, ${r.unchanged} already correct.`,r.dry_run?'':'pos-done'));
    if(r.pos.blank_codes||r.pos.rounded_quantities||r.variants_without_sku)out.append(el('p',[r.pos.blank_codes?`${r.pos.blank_codes} mPOS rows have no stock code`:'',r.pos.rounded_quantities?`${r.pos.rounded_quantities} quantities were negative or fractional and were rounded down (never below 0)`:'',r.variants_without_sku?`${r.variants_without_sku} website variants have no SKU and were skipped`:''].filter(Boolean).join(' · ')+'.','muted'));
-   out.append(section(r.dry_run?'Will change':'Changed',r.changed,mini(['Product','Variant','SKU','Now','After','Held by unpaid orders'],r.changes.map(c=>[c.product_title,c.variant,c.sku,c.before,c.after,c.held||''])),r.dry_run));
+   out.append(section(r.dry_run?'Will change':'Changed',r.changed,mini(['Product','Variant','SKU','mPOS item','Now','After','Held by unpaid orders'],r.changes.map(c=>[c.product_title,c.variant,c.sku,c.stock_code?[c.stock_code,c.colour].filter(Boolean).join(' · '):'not in mPOS',c.before,c.after,c.held||''])),r.dry_run));
    const extra=more(r.changes.length,r.changed);if(extra)out.append(extra);
    const siteBody=el('div');siteBody.append(el('p','Selling variants whose SKU is not in the mPOS in-stock list: sold out in mPOS, or the SKU is written differently.','muted'),mini(['Product','Variant','SKU','Website stock'],r.site_only.items.map(v=>[v.product_title,v.variant,v.sku,v.inventory])));
    out.append(section('On the website, not in mPOS',r.site_only.total,siteBody));
-   const posBody=el('div');posBody.append(mini(['mPOS stock code','Description','Colour','Available'],r.pos_only.items.map(p=>[p.stock_code,p.description,p.colour,p.qty])));const pm=more(r.pos_only.items.length,r.pos_only.total);if(pm)posBody.append(pm);
+   const posBody=el('div');posBody.append(mini(['mPOS stock code','Colour','Size','Description','Available'],r.pos_only.items.map(p=>[p.stock_code,p.colour,p.size,p.description,p.qty])));const pm=more(r.pos_only.items.length,r.pos_only.total);if(pm)posBody.append(pm);
    out.append(section('In mPOS, not on the website',r.pos_only.total,posBody));
-   if(r.fuzzy.length)out.append(section('Matched ignoring spaces and dashes',r.fuzzy.length,mini(['Website SKU','mPOS stock code','Product'],r.fuzzy.map(f=>[f.sku,f.stock_code,f.product_title]))));
+   const mBody=el('div');mBody.append(el('p','How each website SKU was matched: mPOS stock code without its category prefix (BAG-, ACC-…) plus colour and size, ignoring spaces and dashes.','muted'),mini(['Website SKU','Product','Variant','mPOS stock code','Colour','Size','mPOS available','Matched by'],r.matches.map(m=>[m.sku,m.product_title,m.variant,m.stock_code,m.colour,m.size,m.qty,m.how])));const mm=more(r.matches.length,r.matched);if(mm)mBody.append(mm);
+   out.append(section('Matched',r.matched,mBody));
    if(r.ambiguous.length)out.append(section('Skipped: could match more than one item',r.ambiguous.length,mini(['SKUs','Reason'],r.ambiguous.map(a=>[a.sku,a.reason])),true));
    if(r.dry_run){
     const zero=el('input');zero.type='checkbox';zero.id='pos-zero-missing';const zl=el('label',` Also set the ${r.site_only.total} website variants not in the mPOS list to 0 (out of stock)`);zl.prepend(zero);zl.className='checkbox-line';

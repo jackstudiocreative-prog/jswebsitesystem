@@ -1,8 +1,8 @@
 # V3 stock from the POS (mPOS)
 
-Status: **implemented, not yet run against the real mPOS API** (needs `MPOS_API_KEY` in Vercel).
-Tests use a stand-in that returns rows in the shape published in the mPOS swagger
-(`https://api_jack.mpos-web.com/swagger/v1/swagger.json`, *JACKSTUDIO API v1*).
+Status: **reads the real mPOS on staging** (2026-11-20: 24,493 stock rows, 54 warehouses, 2,068 in-stock
+codes). SKU matching by model + colour added after the first real check matched nothing; not yet applied.
+Tests use a stand-in in the mPOS format (swagger *JACKSTUDIO API v1*).
 
 Shopify's inventory is not accurate, so website stock comes from the shop POS. The website only
 **reads** mPOS; nothing is written to it.
@@ -18,7 +18,9 @@ Admin → Products → **Inventory** → card **Sync from POS** (editors and own
    - *On the website, not in mPOS*: selling variants whose SKU is not in the mPOS in-stock list (sold out
      in mPOS, or the SKU is written differently).
    - *In mPOS, not on the website*: in-stock POS items with no website variant.
-   - *Matched ignoring spaces and dashes* and *Skipped: could match more than one item*.
+   - *Warehouses*: every mPOS warehouse with its ID, rows and whether it is counted.
+   - *Matched*: which mPOS code + colour each website SKU was matched to, and how.
+   - *Skipped: could match more than one item*.
 3. **Apply to website stock** writes exactly the mPOS stock that was checked (it does not read mPOS
    again). Optional tick box: also set the "not in mPOS" variants to 0.
 
@@ -39,11 +41,14 @@ Admin → Products → **Inventory** → card **Sync from POS** (editors and own
 - Every mPOS page is logged in the Vercel function log with its status, time and size
   (`pos-sync: mPOS page`). Failures say the HTTP status, content type, length, time and the start of the
   reply (never the key), in the error and in the log.
-- Rows are per item **per warehouse**. `qtyAvailable` is summed per `stockCode` over all warehouses
-  (or only `MPOS_WAREHOUSE_ID`), rounded down, never below 0.
-- `stockCode` = website variant SKU, ignoring case and repeated spaces. If that finds nothing, spaces,
-  dashes, dots and slashes are ignored too (`BAD 40107-F` = `BAD 40107 F`), only when exactly one item on
-  each side matches.
+- Rows are per item colour/size **per warehouse**. `qtyAvailable` is summed per `stockCode` + `colour` +
+  `size` over the counted warehouses (all, or those in `MPOS_WAREHOUSE_ID`), rounded down, never below 0.
+- mPOS keeps the model in `stockCode` with a category prefix and the colour apart; the website SKU has both:
+  `BAG-BAD40107` + colour `F` = website `BAD 40107 F`. Matching ignores case, spaces, dashes, dots and
+  slashes, drops the category prefix (2–6 letters and a dash, only when a number follows), and goes from
+  most to least specific: model + colour + size, then model + colour, then model alone (website products
+  with one variant and no colour in the SKU, e.g. `BAD21002`). If a SKU fits more than one mPOS item in a
+  pass it is skipped and listed, never guessed.
 - Website stock = mPOS available − units held by unpaid website orders (checkout already took those off and
   gives them back if the order expires).
 - One SQL statement updates the variants and writes one inventory-history row each (reason *Stocktake*,
@@ -58,7 +63,7 @@ Admin → Products → **Inventory** → card **Sync from POS** (editors and own
 | --- | --- |
 | `MPOS_API_KEY` | The mPOS API key (`SalesApi:ApiKey`). Server-only; never in the browser, chat or screenshots. |
 | `MPOS_API_URL` | Optional. Default `https://api_jack.mpos-web.com`. |
-| `MPOS_WAREHOUSE_ID` | Optional. Only count this warehouse. Empty = all warehouses added together. |
+| `MPOS_WAREHOUSE_ID` | Warehouse IDs to count, comma-separated (`12` or `12,15`; IDs are in the card's *Warehouses* list). Empty = all 54 added together, which includes consignment, reject and event stock, so set this before applying. |
 
 Redeploy after adding them. Without `MPOS_API_KEY` the card shows "POS sync is not set up".
 

@@ -6,7 +6,7 @@ import {createServer} from 'node:http';
 import {migrate} from '../src/migrate.mjs';
 import {handler} from '../src/handler.mjs';
 import {testGateway} from '../src/payments.mjs';
-import {aggregate,matchSkus,skuKey,compactKey,posClientFromEnv,readPosPage} from '../src/pos-stock.mjs';
+import {aggregate,matchSkus,skuKey,compactKey,posClientFromEnv,readPosPage,warehouseIdsFromEnv} from '../src/pos-stock.mjs';
 
 // Shape of GET /api/stock-warehouse rows (swagger StockWarehouseBalanceResponse), trimmed.
 const row=(id,stockCode,warehouseId,qtyAvailable,extra={})=>({id,stockMasterId:id,warehouseId,warehouseCode:'W'+warehouseId,warehouseName:warehouseId===1?'HQ':'Mid Valley',stockCode,description:'Item '+stockCode,colour:'Brown',qtyOnHand:qtyAvailable,qtyAvailable,isActive:true,...extra});
@@ -19,36 +19,67 @@ test('SKU keys: case and repeated spaces ignored; compact key also drops dashes,
  assert.equal(skuKey(null),'');
 });
 
-test('aggregate: sums every warehouse per stock code, never below 0, whole units only',()=>{
- const {codes,warehouses,blank,rounded}=aggregate([row(1,'K 395 A',1,3),row(2,'k 395 a',2,4),row(3,'JWB-1',1,-2),row(4,'JWB-1',2,1),row(5,'',1,9),row(6,'X1',1,2.6),row(7,'Y1',1,null)]);
- assert.equal(codes.get('k 395 a').qty,7);assert.equal(codes.get('k 395 a').rows,2);
- assert.equal(codes.get('jwb-1').qty,0,'-2 + 1 is clamped to 0');
- assert.equal(codes.get('x1').qty,2);assert.equal(codes.get('y1').qty,0);
+const col=(id,code,wh,qty,colour,size='')=>row(id,code,wh,qty,{colour,size});
+
+test('aggregate: per stock code + colour + size over the counted warehouses, never below 0, whole units only',()=>{
+ const {codes,warehouses,blank,rounded}=aggregate([col(1,'BAG-BAD40107',1,3,'F'),col(2,'bag-bad40107',2,4,'f'),col(3,'BAG-BAD40107',1,2,'B'),col(4,'JWB-1',1,-2,'A'),col(5,'JWB-1',2,1,'A'),col(6,'',1,9,'A'),col(7,'X1',1,2.6,''),col(8,'Y1',1,null,'')]);
+ assert.equal(codes.get('bag-bad40107|f|').qty,7,'same code and colour: warehouses added');
+ assert.equal(codes.get('bag-bad40107|b|').qty,2,'another colour stays apart');
+ assert.equal(codes.get('jwb-1|a|').qty,0,'-2 + 1 is clamped to 0');
+ assert.equal(codes.get('x1||').qty,2);assert.equal(codes.get('y1||').qty,0);
  assert.equal(blank,1);assert.equal(rounded,2);
- assert.deepEqual(warehouses.map(w=>[w.name,w.rows]),[['HQ',4],['Mid Valley',2]],'rows without a stock code are not counted');
+ assert.deepEqual(warehouses.map(w=>[w.name,w.rows,w.counted]),[['HQ',5,true],['Mid Valley',2,true]],'rows without a stock code are not counted');
+ // Only chosen warehouses count; the others are still listed.
+ const one=aggregate([col(1,'BAG-BAD40107',1,3,'F'),col(2,'BAG-BAD40107',2,4,'F')],[2]);
+ assert.equal(one.codes.get('bag-bad40107|f|').qty,4);
+ assert.deepEqual(one.warehouses.map(w=>[w.id,w.counted]),[[2,true],[1,false]]);
 });
 
-test('matchSkus: exact first, loose only when unique on both sides, ambiguous skipped, leftovers listed',()=>{
- const {codes}=aggregate([row(1,'BAD 40107 F',1,5),row(2,'BAD60303-F',1,2),row(3,'JWC 1-A',1,1),row(4,'JWC1A',1,1),row(5,'ONLY-POS',1,8),row(6,'jk 1',1,4)]);
+test('matchSkus: website SKU = mPOS model (category prefix dropped) + colour; most specific first; never guesses',()=>{
+ const {codes}=aggregate([
+  col(1,'BAG-BAD40107',1,3,'F'),col(2,'BAG-BAD40107',1,1,'B'),col(3,'BAG-BAD40107',1,2,'E'),
+  col(4,'BAG-BAD60303',1,5,'F'),col(5,'WAL-JWC50351',1,4,'B'),
+  col(6,'BAG-BAD21002',1,7,'A'),                         // single colour in mPOS: website SKU has no colour
+  col(7,'BAG-BAD40313',1,1,'A'),col(8,'BAG-BAD40313',1,1,'B'), // two colours: website "BAD40313" is ambiguous
+  col(9,'ACC-BELTRING35',1,9,'A'),                       // not on the website
+  col(10,'BLT-JB100',1,2,'A','32'),col(11,'BLT-JB100',1,3,'A','34'),
+ ]);
  const v=(id,sku)=>({id:String(id),sku,active:true,product_status:'active'});
- const r=matchSkus(codes,[v(1,'bad 40107 f'),v(2,'BAD 60303 F'),v(3,'JWC-1A'),v(4,'ONLY-SITE'),v(5,null),v(6,'JK 1')]);
- assert.deepEqual(r.matched.map(m=>[m.variant.id,m.pos.stock_code,m.fuzzy]).sort(),[['1','BAD 40107 F',false],['2','BAD60303-F',true],['6','jk 1',false]]);
- assert.equal(r.ambiguous.length,1,'JWC-1A could be JWC 1-A or JWC1A');assert.match(r.ambiguous[0].sku,/JWC-1A/);
- assert.deepEqual(r.posOnly.map(p=>p.stock_code),['ONLY-POS']);
- assert.deepEqual(r.siteOnly.map(s=>s.sku),['ONLY-SITE'],'variants without SKU are not listed');
+ const r=matchSkus(codes,[v(1,'BAD 40107 F'),v(2,'BAD 40107 B'),v(3,'BAD60303-F'),v(4,'JWC50351-B'),v(5,'BAD21002'),v(6,'BAD40313'),v(7,'ONLY-SITE'),v(8,null),v(9,'JB100 A 34'),v(10,'JWC50351-C')]);
+ const got=Object.fromEntries(r.matched.map(m=>[m.variant.sku,[m.pos.stock_code,m.pos.colour,m.pos.qty,m.how]]));
+ assert.deepEqual(got['BAD 40107 F'],['BAG-BAD40107','F',3,'model + colour']);
+ assert.deepEqual(got['BAD 40107 B'],['BAG-BAD40107','B',1,'model + colour']);
+ assert.deepEqual(got['BAD60303-F'],['BAG-BAD60303','F',5,'model + colour']);
+ assert.deepEqual(got['JWC50351-B'],['WAL-JWC50351','B',4,'model + colour']);
+ assert.deepEqual(got['BAD21002'],['BAG-BAD21002','A',7,'model only']);
+ assert.deepEqual(got['JB100 A 34'],['BLT-JB100','A',3,'model + colour + size']);
+ assert.equal(r.matched.length,6);
+ assert.equal(r.ambiguous.length,1);assert.equal(r.ambiguous[0].sku,'BAD40313');assert.match(r.ambiguous[0].reason,/Fits 2 mPOS items \(model only\): BAG-BAD40313 colour A, BAG-BAD40313 colour B/);
+ assert.deepEqual(r.siteOnly.map(s=>s.sku).sort(),['JWC50351-C','ONLY-SITE'],'sold out / unknown; variants without SKU are not listed');
+ assert.deepEqual(r.posOnly.map(p=>`${p.stock_code} ${p.colour}${p.size?' '+p.size:''}`).sort(),['ACC-BELTRING35 A','BAG-BAD40107 E','BAG-BAD40313 A','BAG-BAD40313 B','BLT-JB100 A 32']);
+ // The same SKU on two website variants is never matched.
+ const dup=matchSkus(codes,[v(1,'BAD 40107 F'),v(2,'bad40107-f')]);assert.equal(dup.matched.length,0);assert.match(dup.ambiguous[0].reason,/more than one website variant/);
+});
+
+test('MPOS_WAREHOUSE_ID: empty = all; one or more IDs separated by commas',()=>{
+ assert.equal(warehouseIdsFromEnv({}),null);assert.equal(warehouseIdsFromEnv({MPOS_WAREHOUSE_ID:' '}),null);
+ assert.deepEqual(warehouseIdsFromEnv({MPOS_WAREHOUSE_ID:'12'}),[12]);
+ assert.deepEqual(warehouseIdsFromEnv({MPOS_WAREHOUSE_ID:'12, 15,12'}),[12,15]);
+ assert.throws(()=>warehouseIdsFromEnv({MPOS_WAREHOUSE_ID:'HQ'}),/warehouse numbers/);
 });
 
 test('mPOS client: one page per call with X-API-Key and the required filters; compact rows',async()=>{
  assert.equal(posClientFromEnv({}),null,'no key: not configured');
  assert.throws(()=>posClientFromEnv({MPOS_API_KEY:'k',MPOS_API_URL:'http://evil.test'}),/https/);
  assert.throws(()=>posClientFromEnv({MPOS_API_KEY:'k',MPOS_WAREHOUSE_ID:'abc'}),/warehouse/);
+ assert.equal(posClientFromEnv({MPOS_API_KEY:'k',MPOS_WAREHOUSE_ID:'3,4'}).warehouseId,null,'several warehouses: read all, count the chosen ones');
  const all=Array.from({length:1203},(_,i)=>row(i+1,'S'+i,1,1));const calls=[];
  const fake=async(url,init)=>{calls.push({url:new URL(url),key:init.headers['X-API-Key']});const u=new URL(url),page=Number(u.searchParams.get('page')),size=Number(u.searchParams.get('pageSize'));return Response.json({page,pageSize:size,totalCount:all.length,items:all.slice((page-1)*size,page*size)});};
  const client=posClientFromEnv({MPOS_API_KEY:'secret-key',MPOS_WAREHOUSE_ID:'3'},fake);
  await quiet(async({logs})=>{
   const r=await readPosPage(client,{step:'read',page:3,page_size:500});
   assert.deepEqual([r.page,r.page_size,r.total_count,r.items.length],[3,500,1203,203]);
-  assert.deepEqual(r.items[0],{i:1001,s:'S1000',q:1,w:1,wc:'W1',wn:'HQ',d:'Item S1000',c:'Brown'});
+  assert.deepEqual(r.items[0],{i:1001,s:'S1000',q:1,w:1,wc:'W1',wn:'HQ',d:'Item S1000',c:'Brown',z:''});
   assert.equal(calls[0].url.origin+calls[0].url.pathname,'https://api_jack.mpos-web.com/api/stock-warehouse');
   assert.deepEqual(Object.fromEntries(calls[0].url.searchParams),{inStockOnly:'true',isActive:'true',pageSize:'500',page:'3',warehouseId:'3'});
   assert.equal(calls[0].key,'secret-key');
@@ -77,13 +108,13 @@ test('mPOS client: errors say what happened (status, type, length, start of repl
 });
 
 // Fake mPOS behind the real handler; the test reads it the way the admin page does.
-async function harness(feedRows,{failSize=null}={}){
+async function harness(feedRows,{failSize=null,posWarehouses=null}={}){
  const db=new PGlite();const sql={query:(q,args)=>q.startsWith('SELECT pg_advisory_xact_lock')?Promise.resolve({rows:[]}):q.includes(';')&&!args?db.exec(q).then(r=>r.at(-1)):db.query(q,args)};
  await migrate(sql);await db.query("INSERT INTO staff VALUES ('editor','editor',true),('viewer','viewer',true)");await db.query('SET ROLE jackstudio_api');
  const state={rows:feedRows,calls:[]};
  const pos={fetchPage:async(page,size)=>{state.calls.push([page,size]);if(size===failSize){const e=new Error('mPOS did not answer within 24 seconds (page 1, 500 rows). Nothing was changed.');e.status=504;throw e;}return {page,pageSize:size,totalCount:state.rows.length,items:state.rows.slice((page-1)*size,page*size)};}};
  const gateway=testGateway({provider:'mock',serviceId:'JSMOCK',password:'p'.repeat(40),actionUrl:'https://pay.test',baseUrl:'https://shop.test'});
- const server=createServer(handler({connect:async()=>({...sql,release(){}})},async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false,pos}));
+ const server=createServer(handler({connect:async()=>({...sql,release(){}})},async sub=>({sub,aal:'aal2'}),{payments:gateway,rateLimits:false,pos,posWarehouses}));
  await new Promise(r=>server.listen(0,'127.0.0.1',r));const base='http://127.0.0.1:'+server.address().port+'/api/v3/';
  const request=async(path,method='GET',body,token='editor')=>{const headers={'Content-Type':'application/json'};if(token)headers.Authorization='Bearer '+token;const r=await fetch(base+path,{method,headers,...(body?{body:JSON.stringify(body)}:{})});const t=await r.text();let j;try{j=JSON.parse(t);}catch{j=t;}return {status:r.status,body:j};};
  // Same loop as the admin card: pages until totalCount; 500 first, 100 if a 500-row page fails.
@@ -102,7 +133,7 @@ const stockOf=async(db,sku)=>(await db.query('SELECT inventory FROM product_vari
 const balanced=async db=>(await db.query('SELECT bool_and(v.inventory=coalesce((SELECT sum(delta) FROM inventory_adjustments a WHERE a.variant_id=v.id),0)) AS ok FROM product_variants v')).rows[0].ok;
 
 test('Sync from POS: check changes nothing; apply sets stock, keeps the ledger balanced, lists both kinds of missing SKUs',async()=>{
- const h=await harness([row(1,'K 395 A',1,3),row(2,'K 395 A',2,4),row(3,'BAD 40107-F',1,2),row(4,'NEW-IN-POS',1,9),row(5,'CH-BLK',1,5)]);
+ const h=await harness([col(1,'WAL-K395',1,3,'A'),col(2,'WAL-K395',2,4,'A'),col(3,'BAG-BAD40107',1,2,'F'),col(4,'ACC-NEWINPOS',1,9,'A'),col(5,'CH',1,5,'BLK')]);
  try{
   const c=(await h.request('collections','POST',{title:'Shop',status:'active'})).body;
   const mk=body=>h.request('products','POST',{collection_ids:[String(c.id)],status:'active',...(body.variants?{}:{price_minor:1000}),...body});
@@ -122,8 +153,10 @@ test('Sync from POS: check changes nothing; apply sets stock, keeps the ledger b
   let r=(await h.sync({dry_run:true})).body;
   assert.equal(r.dry_run,true);assert.equal(r.matched,3);assert.equal(r.changed,2);assert.equal(r.unchanged,1,'CH-BLK already 5');
   assert.deepEqual(r.changes.map(x=>[x.sku,x.before,x.after]).sort(),[['BAD 40107 F',0,2],['k 395 a',20,7]]);
-  assert.deepEqual(r.fuzzy.map(f=>[f.sku,f.stock_code]),[['BAD 40107 F','BAD 40107-F']]);
-  assert.deepEqual(r.pos_only.items.map(p=>[p.stock_code,p.qty]),[['NEW-IN-POS',9]]);
+  assert.deepEqual(r.matches.map(m=>[m.sku,m.stock_code,m.colour,m.qty]),[['BAD 40107 F','BAG-BAD40107','F',2],['CH-BLK','CH','BLK',5],['k 395 a','WAL-K395','A',7]]);
+  assert.deepEqual(r.changes.find(x=>x.sku==='k 395 a').stock_code,'WAL-K395');
+  assert.deepEqual(r.pos_only.items.map(p=>[p.stock_code,p.colour,p.qty]),[['ACC-NEWINPOS','A',9]]);
+  assert.equal(r.pos.warehouse_filter,null);assert.equal(r.pos.counted_warehouses,2);
   assert.deepEqual(r.site_only.items.map(v=>v.sku),['CH-BRN'],'archived products are not listed');
   assert.equal(r.pos.stock_codes,4);assert.equal(r.pos.warehouses.length,2);assert.equal(r.pos.rows,5);assert.equal(r.pos.page_size,500);
   assert.equal(await stockOf(h.db,'k 395 a'),20,'check changed nothing');
@@ -158,6 +191,17 @@ test('Sync from POS: many pages are read one request each; a failing 500-row pag
   assert.equal(r.body.pos.rows,1234);assert.equal(r.body.pos.page_size,100);assert.equal(r.body.pos.pages,13);
   assert.deepEqual(r.body.changes.map(c=>[c.sku,c.before,c.after]),[['BULK-7',1,3]]);
   assert.equal(r.body.pos_only.total,1233);
+ }finally{await h.close();}
+});
+
+test('Sync from POS: with MPOS_WAREHOUSE_ID only the chosen warehouses count; the rest are listed, not added',async()=>{
+ const h=await harness([col(1,'BAG-BAD40107',1,3,'F'),col(2,'BAG-BAD40107',2,40,'F'),col(3,'BAG-BAD40107',3,500,'F')],{posWarehouses:[1,2]});
+ try{
+  await h.request('products','POST',{title:'Backpack',status:'active',sku:'BAD 40107 F',price_minor:100,inventory:0});
+  const r=(await h.sync({dry_run:true})).body;
+  assert.deepEqual(r.changes.map(c=>[c.sku,c.after]),[['BAD 40107 F',43]],'3 + 40; warehouse 3 is not counted');
+  assert.deepEqual(r.pos.warehouse_filter,[1,2]);assert.equal(r.pos.counted_warehouses,2);
+  assert.deepEqual(r.pos.warehouses.map(w=>[w.id,w.counted]),[[1,true],[2,true],[3,false]]);
  }finally{await h.close();}
 });
 
