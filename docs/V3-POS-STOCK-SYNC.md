@@ -7,6 +7,21 @@ Tests use a stand-in in the mPOS format (swagger *JACKSTUDIO API v1*).
 Shopify's inventory is not accurate, so website stock comes from the shop POS. The website only
 **reads** mPOS; nothing is written to it.
 
+## Product list 2026 (Jack Studio only)
+
+Since 2026-11-20 the website follows Jack Studio's *Product Planning 2026* sheet: 140 models from
+*PRODUCT BY SERIES(2026)* and *CORPORATE PRODUCT 2026*, kept in `v3/shared/product-plan-2026.mjs`
+(Euro Polo left out on purpose; ranges such as `JWC41056-57` written out). To change the list, edit that file.
+
+- Only website variants and mPOS items of listed models are synced and appear in the lists. A SKU belongs to
+  a listed model when, ignoring spaces and dashes, it starts with the model and what follows is a short
+  colour/size code starting with a letter (`BAD60303-F`, `JWD 30157 N A`); `BL 3113 B` is not `BL311`.
+- *In the list, not on the website*: listed models with no website product, with the mPOS quantity. Nothing
+  is created automatically.
+- *On the website, not in the list*: products with no listed SKU. The tick box **Hide the N active website
+  products not in the list** sets them to Draft when applying (audited; nothing deleted; each can be made
+  Active again). Products without any SKU and archived products are never hidden.
+
 ## Where staff use it
 
 Admin → Products → **Inventory** → card **Sync from POS** (editors and owners; viewers do not see it).

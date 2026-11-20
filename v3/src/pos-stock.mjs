@@ -1,4 +1,5 @@
 import {HttpError} from './auth.mjs';
+import {PLAN_2026,PLAN_2026_NAME} from '../shared/product-plan-2026.mjs';
 // Stock from the shop POS (mPOS "JACKSTUDIO API"). The POS is the record for stock: Shopify's
 // inventory is not accurate. Read-only: nothing is ever written to mPOS.
 //
@@ -21,6 +22,18 @@ export const compactKey=s=>skuKey(s).replace(/[\s\-_./]/g,'');
 // Category prefix in front of the model in mPOS stock codes: "BAG-", "ACC-" (only when a number follows).
 const PREFIX=/^[a-z]{2,6}\s*-\s*(?=.*\d)/;
 export const baseCode=code=>skuKey(code).replace(PREFIX,'');
+
+// Product list (shared/product-plan-2026.mjs). A SKU or mPOS code belongs to a listed model when, with
+// spaces and dashes ignored, it starts with the model and what follows is a short colour/size code that
+// starts with a letter: "BAD60303-F" and "jwd 30157 n a" do, "BL 3113 B" is not BL311. Longest model wins.
+export const planModels=rows=>[...new Set(rows.map(r=>compactKey(Array.isArray(r)?r[0]:r)))].filter(Boolean).sort((a,b)=>b.length-a.length);
+export const PLAN_MODELS=planModels(PLAN_2026);
+export function planModelOf(code,models=PLAN_MODELS){
+ const k=compactKey(code);if(!k)return null;
+ for(const m of models){if(!k.startsWith(m))continue;const rest=k.slice(m.length);if(rest===''||(rest.length<=8&&/^[a-z]/.test(rest)))return m;}
+ return null;
+}
+const posPlanModel=(e,models)=>planModelOf(baseCode(e.stock_code),models)??planModelOf(e.stock_code,models);
 
 // MPOS_WAREHOUSE_ID: warehouse IDs to count, comma-separated ("12" or "12,15"). Empty = every warehouse.
 export function warehouseIdsFromEnv(env=process.env){
@@ -151,14 +164,14 @@ export function matchSkus(codes,variants){
 export function syncOptions(input){
  const value=input??{};
  if(typeof value!=='object'||Array.isArray(value))throw new HttpError(400,'Object required');
- if(Object.keys(value).some(k=>!['dry_run','zero_missing','rows','pages','page_size'].includes(k)))throw new HttpError(400,'Unknown field');
- for(const k of ['dry_run','zero_missing'])if(value[k]!==undefined&&typeof value[k]!=='boolean')throw new HttpError(400,`${k} must be true or false`);
+ if(Object.keys(value).some(k=>!['dry_run','zero_missing','hide_outside','rows','pages','page_size'].includes(k)))throw new HttpError(400,'Unknown field');
+ for(const k of ['dry_run','zero_missing','hide_outside'])if(value[k]!==undefined&&typeof value[k]!=='boolean')throw new HttpError(400,`${k} must be true or false`);
  if(!Array.isArray(value.rows))throw new HttpError(400,'Read stock from mPOS first');
  if(value.rows.length>MAX_ROWS)throw new HttpError(400,`More than ${MAX_ROWS} mPOS rows`);
  const str=(v,n)=>typeof v==='string'&&v.length<=n;
  for(const r of value.rows)if(!r||typeof r!=='object'||!str(r.s,100)||typeof r.q!=='number'||!Number.isFinite(r.q)||!(r.w===null||Number.isInteger(r.w)||str(r.w,40))||!str(r.wc??'',40)||!str(r.wn??'',80)||!str(r.d??'',120)||!str(r.c??'',60)||!str(r.z??'',60))throw new HttpError(400,'Invalid mPOS row');
  const pages=Number.isInteger(value.pages)&&value.pages>0?value.pages:null,pageSize=POS_PAGE_SIZES.includes(value.page_size)?value.page_size:null;
- return {dryRun:value.dry_run===true,zeroMissing:value.zero_missing===true,feed:{rows:value.rows.map(expand),pages,total:value.rows.length,page_size:pageSize}};
+ return {dryRun:value.dry_run===true,zeroMissing:value.zero_missing===true,hideOutside:value.hide_outside===true,feed:{rows:value.rows.map(expand),pages,total:value.rows.length,page_size:pageSize}};
 }
 
 const cap=list=>list.slice(0,LIST_CAP);
@@ -166,12 +179,34 @@ const label=v=>v.option_values?.length?v.option_values.join(' / '):'Default';
 
 // Matches the mPOS feed to website variants and (unless dry run) sets their stock in one statement,
 // with one ledger row per changed variant (reason "stocktake", note "POS sync …").
-export async function syncFromPos(db,{feed,dryRun,zeroMissing,warehouseIds=null},actor){
- const {codes,warehouses,blank,rounded}=aggregate(feed.rows,warehouseIds);
- const variants=(await db.query(`SELECT v.id::text AS id,v.product_id::text AS product_id,v.sku,v.inventory,v.active,v.option_values,p.title AS product_title,p.status AS product_status
+// Only models in the product list take part: website variants and mPOS items of other models are left
+// out of matching and of every list. plan=null means every model (no list).
+export async function syncFromPos(db,{feed,dryRun,zeroMissing,hideOutside=false,warehouseIds=null,planRows=PLAN_2026},actor){
+ const plan=planRows?planModels(planRows):null;
+ const agg=aggregate(feed.rows,warehouseIds),{warehouses,blank,rounded}=agg;
+ const all=(await db.query(`SELECT v.id::text AS id,v.product_id::text AS product_id,v.sku,v.inventory,v.active,v.option_values,p.title AS product_title,p.status AS product_status
   FROM product_variants v JOIN products p ON p.id=v.product_id ORDER BY p.title,v.position,v.id`)).rows;
- const noSku=variants.filter(v=>v.active&&v.product_status!=='archived'&&!skuKey(v.sku)).length;
+ const noSku=all.filter(v=>v.active&&v.product_status!=='archived'&&!skuKey(v.sku)).length;
+ const variants=plan?all.filter(v=>planModelOf(v.sku,plan)):all;
+ const codes=plan?new Map([...agg.codes].filter(([,e])=>posPlanModel(e,plan))):agg.codes;
  const {matched,ambiguous,posOnly,siteOnly}=matchSkus(codes,variants);
+ // Products with no SKU in the list (archived ones aside). Products without any SKU are reported, never hidden.
+ const byProduct=new Map();
+ for(const v of all){if(v.product_status==='archived')continue;const p=byProduct.get(v.product_id)??{product_id:v.product_id,title:v.product_title,status:v.product_status,skus:[],in_plan:false};if(skuKey(v.sku))p.skus.push(v.sku);if(!plan||planModelOf(v.sku,plan))p.in_plan=true;byProduct.set(v.product_id,p);}
+ const outside=[...byProduct.values()].filter(p=>!p.in_plan&&p.skus.length).sort((a,b)=>a.title.localeCompare(b.title));
+ const toHide=outside.filter(p=>p.status==='active');
+ let hidden=0;
+ if(hideOutside&&!dryRun&&toHide.length){
+  // audit_events is write-only for the API role, so the ids come from the UPDATE.
+  const ids=(await db.query("UPDATE products SET status='draft',updated_at=now() WHERE id = ANY($1::bigint[]) AND status='active' RETURNING id::text AS id",[toHide.map(p=>p.product_id)])).rows.map(r=>r.id);
+  if(ids.length)await db.query("INSERT INTO audit_events(actor,action,entity,entity_id) SELECT $2::text,'update','products',unnest($1::bigint[])",[ids,actor]);
+  hidden=ids.length;
+ }
+ // Models in the list with no website variant at all, with what mPOS has of them.
+ const onSite=new Set(variants.map(v=>planModelOf(v.sku,plan??[])).filter(Boolean));
+ const posByModel=new Map();for(const e of codes.values()){const m=posPlanModel(e,plan??[]);if(m)posByModel.set(m,(posByModel.get(m)??0)+e.qty);}
+ const rowsOf=r=>Array.isArray(r)?r:[r,'','',''];
+ const planMissing=plan?planRows.map(rowsOf).filter(r=>!onSite.has(compactKey(r[0]))).map(r=>({model:r[0],category:r[1],type:r[2],price:r[3],mpos_available:posByModel.get(compactKey(r[0]))??0})):[];
  // Only selling variants count as "missing from mPOS"; inactive or archived ones are left alone.
  const missing=siteOnly.filter(v=>v.active&&v.product_status!=='archived');
  const targets=[...matched.map(m=>({id:m.variant.id,pos:m.pos.qty,source:'pos'})),...(zeroMissing?missing.map(v=>({id:v.id,pos:0,source:'missing'})):[])];
@@ -200,8 +235,11 @@ export async function syncFromPos(db,{feed,dryRun,zeroMissing,warehouseIds=null}
  const changed=changes.map(c=>{const v=byId.get(c.variant_id),p=posFor.get(c.variant_id);return {variant_id:c.variant_id,product_id:v.product_id,product_title:v.product_title,variant:label(v),sku:v.sku,stock_code:p?.stock_code??null,colour:p?.colour??null,before:Number(c.before),after:Number(c.after),held:c.held==null?null:Number(c.held)};});
  const variantRow=v=>({variant_id:v.id,product_id:v.product_id,product_title:v.product_title,variant:label(v),sku:v.sku,inventory:v.inventory});
  return {
-  dry_run:dryRun,zero_missing:zeroMissing,
+  dry_run:dryRun,zero_missing:zeroMissing,hide_outside:hideOutside,
+  plan:plan?{name:planRows===PLAN_2026?PLAN_2026_NAME:'Product list',models:plan.length,website_variants:variants.length,outside_variants:all.filter(v=>skuKey(v.sku)).length-variants.length,mpos_items_outside:agg.codes.size-codes.size}:null,
   pos:{rows:feed.total,pages:feed.pages,page_size:feed.page_size??null,stock_codes:codes.size,warehouses,counted_warehouses:warehouses.filter(w=>w.counted).length,warehouse_filter:warehouseIds,blank_codes:blank,rounded_quantities:rounded},
+  outside:{total:outside.length,active:toHide.length,hidden,items:cap(outside.map(p=>({product_id:p.product_id,title:p.title,status:hidden&&p.status==='active'?'draft':p.status,skus:p.skus.slice(0,6).join(', ')+(p.skus.length>6?', …':'')})))},
+  plan_missing:{total:planMissing.length,items:planMissing},
   matched:matched.length,changed:changed.length,unchanged:targets.length-changed.length,
   changes:cap(changed),
   matches:cap(matched.map(m=>({sku:m.variant.sku,product_title:m.variant.product_title,variant:label(m.variant),stock_code:m.pos.stock_code,colour:m.pos.colour,size:m.pos.size,qty:m.pos.qty,how:m.how})).sort((a,b)=>a.sku.localeCompare(b.sku))),
